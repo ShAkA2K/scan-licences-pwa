@@ -1,3 +1,6 @@
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
+
 export type ExportRow = {
   last_name: string;
   first_name: string;
