@@ -1,3 +1,4 @@
+// src/main.tsx
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
@@ -5,12 +6,10 @@ import './index.css'
 import { AuthProvider } from './auth/AuthProvider'
 import ErrorBoundary from './components/ErrorBoundary'
 
-// Flag build-time (mis dans Vercel). Par défaut OFF.
-const ENABLE_PWA = import.meta.env.VITE_ENABLE_PWA === '1'
-
 // Marqueur pour l'overlay diagnostic (injecté dans index.html)
 ;(window as any).__appBooted = false
 
+// ——— util: clear service worker & caches via ?clear-sw
 async function maybeClearSW() {
   if (!location.search.includes('clear-sw')) return false
   try {
@@ -34,21 +33,6 @@ async function maybeClearSW() {
 async function boot() {
   const cleared = await maybeClearSW()
   if (cleared) return
-
-  // PWA uniquement si explicitement activé
-  if (ENABLE_PWA) {
-    try {
-      const { registerSW } = await import('virtual:pwa-register')
-      const updateSW = registerSW({
-        immediate: true,
-        onNeedRefresh() {
-          if (confirm('Mise à jour disponible. Actualiser ?')) updateSW(true)
-        },
-      })
-    } catch (e) {
-      console.warn('PWA disabled / plugin manquant:', e)
-    }
-  }
 
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
