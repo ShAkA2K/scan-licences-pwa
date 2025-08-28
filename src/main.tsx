@@ -3,53 +3,53 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
 import { AuthProvider } from './auth/AuthProvider'
-import { registerSW } from 'virtual:pwa-register'
 import ErrorBoundary from './components/ErrorBoundary'
 
-// ——— util: clear service worker & caches via ?clear-sw
+// Flag build-time (mis dans Vercel). Par défaut OFF.
+const ENABLE_PWA = import.meta.env.VITE_ENABLE_PWA === '1'
+
+// Marqueur pour l'overlay diagnostic (injecté dans index.html)
+;(window as any).__appBooted = false
+
 async function maybeClearSW() {
-  if (location.search.includes('clear-sw')) {
-    try {
-      if ('serviceWorker' in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations()
-        for (const r of regs) await r.unregister()
-      }
-      // Clear caches
-      // @ts-ignore
-      if (typeof caches !== 'undefined') {
-        const keys = await caches.keys()
-        for (const k of keys) await caches.delete(k)
-      }
-      const url = location.origin + location.pathname // drop query
-      location.replace(url)
-      return true
-    } catch (e) {
-      console.error('clear-sw failed:', e)
+  if (!location.search.includes('clear-sw')) return false
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations()
+      for (const r of regs) await r.unregister()
     }
+    // @ts-ignore
+    if (typeof caches !== 'undefined') {
+      const keys = await caches.keys()
+      for (const k of keys) await caches.delete(k)
+    }
+  } catch (e) {
+    console.error('clear-sw failed:', e)
   }
-  return false
+  const url = location.origin + location.pathname // enlève la query
+  location.replace(url)
+  return true
 }
-
-const updateSW = registerSW({
-  immediate: true,
-  onNeedRefresh() {
-    if (confirm('Une mise à jour est disponible. Actualiser ?')) {
-      updateSW(true)
-    }
-  },
-})
-
-// ——— afficher les erreurs JS globales dans la console (et la boundary prendra le relais)
-window.addEventListener('error', (e) => {
-  console.error('window.onerror', e?.error || e?.message || e)
-})
-window.addEventListener('unhandledrejection', (e) => {
-  console.error('unhandledrejection', e?.reason || e)
-})
 
 async function boot() {
   const cleared = await maybeClearSW()
   if (cleared) return
+
+  // PWA uniquement si explicitement activé
+  if (ENABLE_PWA) {
+    try {
+      const { registerSW } = await import('virtual:pwa-register')
+      const updateSW = registerSW({
+        immediate: true,
+        onNeedRefresh() {
+          if (confirm('Mise à jour disponible. Actualiser ?')) updateSW(true)
+        },
+      })
+    } catch (e) {
+      console.warn('PWA disabled / plugin manquant:', e)
+    }
+  }
+
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <ErrorBoundary>
@@ -59,5 +59,12 @@ async function boot() {
       </ErrorBoundary>
     </React.StrictMode>
   )
+
+  ;(window as any).__appBooted = true
 }
+
+// Logs globaux visibles même si React crashe
+window.addEventListener('error', (e) => console.error('window.onerror', e?.error || e?.message || e))
+window.addEventListener('unhandledrejection', (e) => console.error('unhandledrejection', e?.reason || e))
+
 boot()
