@@ -7,6 +7,7 @@ import SessionsTable from './components/SessionsTable'
 import TodayEntries from './components/TodayEntries'
 import MembersDialog from './components/MembersDialog'
 import { CalendarDays, QrCode, Users } from 'lucide-react'
+import AuthBar from './components/AuthBar'
 
 function todayInParisISODate(): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -23,23 +24,29 @@ export default function App() {
   const [membersOpen, setMembersOpen] = useState(false)
 
   async function openSessionDuJour() {
-    setBusy(true); setMsg(null)
-    try {
-      const date = todayInParisISODate()
-      const { data, error } = await supabase
-        .from('sessions')
-        .upsert({ date }, { onConflict: 'date' })
-        .select('id')
-        .single()
-      if (error) throw error
-      setSessionId(data!.id)
-      setMsg('Session ouverte ✅')
-    } catch (e: any) {
-      setMsg('Erreur ouverture session: ' + (e?.message || String(e)))
-    } finally {
-      setBusy(false)
+  setBusy(true); setMsg(null)
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      setMsg('Veuillez vous connecter avant d’ouvrir la session.')
+      return
     }
+    const date = todayInParisISODate()
+    const { data, error } = await supabase
+      .from('sessions')
+      .upsert({ date }, { onConflict: 'date' })
+      .select('id')
+      .single()
+    if (error) throw error
+    setSessionId(data!.id)
+    setMsg('Session ouverte ✅')
+  } catch (e:any) {
+    setMsg('Erreur ouverture session: ' + (e?.message || String(e)))
+  } finally {
+    setBusy(false)
   }
+}
+
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
@@ -64,6 +71,7 @@ export default function App() {
             >
               <Users className="h-4 w-4" /> Membres
             </button>
+			<AuthBar />
             <div className="hidden sm:flex items-center gap-2 text-white/90">
               <CalendarDays className="h-4 w-4" />
               <span className="text-xs">
