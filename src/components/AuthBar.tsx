@@ -11,15 +11,14 @@ export default function AuthBar() {
     try {
       const { data } = await supabase.auth.getSession()
       setUserEmail(data.session?.user?.email ?? null)
-    } catch (e) {
-      console.error('getSession failed', e)
+    } catch {
       setUserEmail(null)
     }
   }
 
   useEffect(() => {
     refresh()
-    const { data: sub } = supabase.auth.onAuthStateChange((_event) => refresh())
+    const { data: sub } = supabase.auth.onAuthStateChange(() => refresh())
     return () => sub.subscription.unsubscribe()
   }, [])
 
@@ -34,25 +33,40 @@ export default function AuthBar() {
       setMsg('Email envoyé. Clique le lien pour te connecter.')
       setEmail('')
     } catch (e: any) {
-      console.error(e)
       setMsg('Erreur connexion: ' + (e?.message || String(e)))
     } finally {
       setLoading(false)
     }
   }
 
+  // Efface toutes traces de session côté navigateur
+  function hardClientLogout() {
+    try {
+      // supabase-js v2 stocke les tokens dans localStorage "sb-<ref>-auth-token"
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (!k) continue
+        if (k.startsWith('sb-') && k.includes('-auth-token')) {
+          localStorage.removeItem(k)
+        }
+      }
+      sessionStorage.clear()
+    } catch {}
+  }
+
   async function signOut() {
+    if (loading) return
     setLoading(true)
     try {
-      const { error } = await supabase.auth.signOut()
-      if (error) throw error
-    } catch (e) {
-      console.error('signOut failed', e)
+      // on tente l’API officielle
+      await supabase.auth.signOut()
+    } catch {
+      // ignore, on passe au hard reset client
     } finally {
+      hardClientLogout()
       setLoading(false)
-      // Nettoyage agressif + reload pour éviter tout état zombie
-      try { localStorage.clear() } catch {}
-      window.location.assign('/')
+      // on force un reload pour remonter l’app sans session
+      window.location.replace('/')
     }
   }
 
@@ -61,8 +75,13 @@ export default function AuthBar() {
       {userEmail ? (
         <div className="flex items-center gap-2">
           <span className="text-white/90">Connecté: <b>{userEmail}</b></span>
-          <button onClick={signOut} className="rounded-lg bg-white/10 px-2 py-1 hover:bg-white/20">
-            Se déconnecter
+          <button
+            id="logoutBtn"
+            type="button"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); void signOut() }}
+            className="rounded-lg bg-white/10 px-2 py-1 hover:bg-white/20"
+          >
+            {loading ? '…' : 'Se déconnecter'}
           </button>
         </div>
       ) : (
@@ -75,11 +94,12 @@ export default function AuthBar() {
             className="w-48 rounded-lg border border-white/20 bg-white/10 px-2 py-1 text-white placeholder-white/60 outline-none"
           />
           <button
-            onClick={signIn}
+            type="button"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); void signIn() }}
             disabled={loading || !email}
             className="rounded-lg bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-50"
           >
-            {loading ? '...' : 'Se connecter'}
+            {loading ? '…' : 'Se connecter'}
           </button>
           {msg && <span className="ml-2 text-white/90">{msg}</span>}
         </div>
