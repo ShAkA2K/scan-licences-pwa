@@ -6,3 +6,6 @@
 
 html, body, #root { height: 100%; }
 body { font-family: Inter, system-ui, sans-serif; }
+/* Toolbars horizontales sans scrollbar visible */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

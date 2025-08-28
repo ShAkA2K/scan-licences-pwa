@@ -11,15 +11,9 @@ type Member = {
 
 const PAGE = 50
 const withTimeout = <T,>(p: Promise<T>, ms = 10000) =>
-  Promise.race<T>([
-    p,
-    new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
-  ]) as Promise<T>
+  Promise.race<T>([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]) as Promise<T>
 
-export default function MembersDialog({
-  open,
-  onClose,
-}: { open: boolean; onClose: () => void }) {
+export default function MembersDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [rows, setRows] = useState<Member[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -62,16 +56,12 @@ export default function MembersDialog({
       const count = res.count ?? 0
 
       if (reset) {
-        setRows(newRows)
-        setPage(1)
-        setHasMore(count > newRows.length)
+        setRows(newRows); setPage(1); setHasMore(count > newRows.length)
       } else {
-        setRows(prev => [...prev, ...newRows])
-        setPage(prev => prev + 1)
+        setRows(prev => [...prev, ...newRows]); setPage(prev => prev + 1)
         setHasMore(count > (rows.length + newRows.length))
       }
     } catch (e: any) {
-      console.error('members load failed', e)
       setError(e?.message || String(e))
     } finally {
       setLoading(false)
@@ -79,32 +69,28 @@ export default function MembersDialog({
   }
 
   useEffect(() => {
-    if (open) {
-      setRows([]); setPage(0); setHasMore(true)
-      load(true)
-    }
+    if (open) { setRows([]); setPage(0); setHasMore(true); load(true) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   function onSearch(e: React.FormEvent) {
     e.preventDefault()
-    setRows([]); setPage(0); setHasMore(true)
-    load(true)
+    setRows([]); setPage(0); setHasMore(true); load(true)
   }
 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px] flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl rounded-2xl bg-white shadow-xl ring-1 ring-black/5 overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
-          <h3 className="text-lg font-semibold text-gray-900">Membres</h3>
+    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px] flex items-stretch sm:items-center justify-center p-0 sm:p-4">
+      <div className="w-full h-full sm:h-auto sm:max-w-3xl sm:rounded-2xl bg-white shadow-xl ring-1 ring-black/5 overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white z-10">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900">Membres</h3>
           <button className="rounded-lg p-1 hover:bg-gray-100" onClick={onClose} aria-label="Fermer">
-            <X className="h-4 w-4" />
+            <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="p-3 sm:p-4 space-y-3 sm:space-y-4 overflow-y-auto">
           <form onSubmit={onSearch} className="flex gap-2">
             <div className="flex-1 flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 focus-within:ring-2 focus-within:ring-blue-500">
               <Search className="h-4 w-4 text-blue-600 shrink-0" />
@@ -118,7 +104,34 @@ export default function MembersDialog({
             <button className="rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700">Chercher</button>
           </form>
 
-          <div className="overflow-hidden rounded-xl border">
+          {/* Cartes mobile */}
+          <div className="grid sm:hidden grid-cols-1 gap-3">
+            {error && <div className="rounded-xl border bg-white px-3 py-4 text-red-600">Erreur: {error}</div>}
+            {!error && displayRows.length === 0 && !loading && (
+              <div className="rounded-xl border bg-white px-3 py-4">Aucun membre.</div>
+            )}
+            {displayRows.map(m => {
+              const full = `${m.last_name ?? ''} ${m.first_name ?? ''}`.trim()
+              return (
+                <div key={m.licence_no} className="rounded-xl border bg-white p-3 flex items-center gap-3">
+                  <img
+                    src={(m as any)._photo}
+                    alt={full || m.licence_no}
+                    className="h-12 w-12 rounded-full object-cover ring-1 ring-black/5"
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                  />
+                  <div className="min-w-0">
+                    <div className="font-medium text-gray-900 truncate">{full || '—'}</div>
+                    <div className="text-xs text-gray-500">{m.licence_no}</div>
+                  </div>
+                </div>
+              )
+            })}
+            {loading && <div className="rounded-xl border bg-white px-3 py-4">Chargement…</div>}
+          </div>
+
+          {/* Table desktop */}
+          <div className="hidden sm:block overflow-hidden rounded-xl border">
             <table className="w-full text-sm">
               <thead className="bg-blue-50 text-blue-900">
                 <tr>
