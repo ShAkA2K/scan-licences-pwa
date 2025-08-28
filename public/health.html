@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+  <meta charset="utf-8" />
+  <title>Health</title>
+  <style>body{font:14px system-ui,Segoe UI,Arial;margin:20px}</style>
+  <h1>OK: static file served</h1>
+  <p>Time: <span id="t"></span></p>
+  <p>User-Agent: <code id="ua"></code></p>
+  <script>
+    document.getElementById('t').textContent = new Date().toISOString();
+    document.getElementById('ua').textContent = navigator.userAgent;
+  </script>
+</html>
