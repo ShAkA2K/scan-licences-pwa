@@ -4,16 +4,14 @@ import { supabase } from '../data/supabase'
 export default function AuthBar() {
   const [email, setEmail] = useState('')
   const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [msg, setMsg] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
 
   async function refresh() {
     try {
       const { data } = await supabase.auth.getSession()
       setUserEmail(data.session?.user?.email ?? null)
-    } catch {
-      setUserEmail(null)
-    }
+    } catch { setUserEmail(null) }
   }
 
   useEffect(() => {
@@ -32,42 +30,40 @@ export default function AuthBar() {
       if (error) throw error
       setMsg('Email envoyé. Clique le lien pour te connecter.')
       setEmail('')
-    } catch (e: any) {
+    } catch (e:any) {
       setMsg('Erreur connexion: ' + (e?.message || String(e)))
     } finally {
       setLoading(false)
     }
   }
 
-  // Efface toutes traces de session côté navigateur
+  // Nettoyage immédiat côté client
   function hardClientLogout() {
     try {
-      // supabase-js v2 stocke les tokens dans localStorage "sb-<ref>-auth-token"
-      for (let i = 0; i < localStorage.length; i++) {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
         const k = localStorage.key(i)
         if (!k) continue
-        if (k.startsWith('sb-') && k.includes('-auth-token')) {
-          localStorage.removeItem(k)
-        }
+        if (k.startsWith('sb-') && k.includes('-auth-token')) localStorage.removeItem(k)
       }
       sessionStorage.clear()
+      // cookie de supabase-js (au cas où)
+      document.cookie.split(';').forEach(c => {
+        const name = c.trim().split('=')[0]
+        if (name.startsWith('sb-') && name.includes('-auth-token')) {
+          document.cookie = `${name}=; Max-Age=0; path=/; SameSite=Lax`
+        }
+      })
     } catch {}
   }
 
-  async function signOut() {
+  function signOutInstant() {
     if (loading) return
     setLoading(true)
-    try {
-      // on tente l’API officielle
-      await supabase.auth.signOut()
-    } catch {
-      // ignore, on passe au hard reset client
-    } finally {
-      hardClientLogout()
-      setLoading(false)
-      // on force un reload pour remonter l’app sans session
-      window.location.replace('/')
-    }
+    // on n'attend PAS le réseau : purge locale + reload immédiat
+    try { hardClientLogout() } catch {}
+    try { supabase.auth.signOut().catch(() => {}) } catch {}
+    // petit délai pour laisser le DOM refléter l'état, puis reload
+    setTimeout(() => window.location.replace('/'), 50)
   }
 
   return (
@@ -76,9 +72,8 @@ export default function AuthBar() {
         <div className="flex items-center gap-2">
           <span className="text-white/90">Connecté: <b>{userEmail}</b></span>
           <button
-            id="logoutBtn"
             type="button"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); void signOut() }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); signOutInstant() }}
             className="rounded-lg bg-white/10 px-2 py-1 hover:bg-white/20"
           >
             {loading ? '…' : 'Se déconnecter'}
