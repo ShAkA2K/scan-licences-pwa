@@ -1,56 +1,72 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../data/supabase'
+import { useAuth } from '../auth/AuthProvider'
 
 export default function AuthBar() {
+  const { session } = useAuth()
   const [email, setEmail] = useState('')
-  const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [code, setCode] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
-
-  async function refresh() {
-    try {
-      const { data } = await supabase.auth.getSession()
-      setUserEmail(data.session?.user?.email ?? null)
-    } catch { setUserEmail(null) }
-  }
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    refresh()
-    const { data: sub } = supabase.auth.onAuthStateChange(() => refresh())
-    return () => sub.subscription.unsubscribe()
-  }, [])
+    if (session?.user?.email) {
+      setMsg(null)
+      setEmail(session.user.email)
+      setCode('')
+    }
+  }, [session])
 
-  async function signIn() {
+  async function signInSend() {
     setMsg(null); setLoading(true)
     try {
+      // envoie mail avec lien + code OTP
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: { emailRedirectTo: window.location.origin },
       })
       if (error) throw error
-      setMsg('Email envoyé. Clique le lien pour te connecter.')
-      setEmail('')
-    } catch (e:any) {
-      setMsg('Erreur connexion: ' + (e?.message || String(e)))
+      setMsg('Code envoyé par email. Saisis-le ci-dessous.')
+    } catch (e: any) {
+      setMsg('Erreur: ' + (e?.message || String(e)))
     } finally {
       setLoading(false)
     }
   }
 
-  // Nettoyage immédiat côté client
+  async function signInVerify() {
+    setMsg(null); setLoading(true)
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email,
+        token: code.trim(),
+        type: 'email', // vérifie le code OTP sans redirection
+      })
+      if (error) throw error
+      setMsg('Connecté ✅')
+      setCode('')
+    } catch (e: any) {
+      setMsg('Code invalide ou expiré.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   function hardClientLogout() {
     try {
+      // purge les clés locales supabase
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const k = localStorage.key(i)
         if (!k) continue
-        if (k.startsWith('sb-') && k.includes('-auth-token')) localStorage.removeItem(k)
+        if (k.includes('tirclub-auth') || (k.startsWith('sb-') && k.includes('-auth-token'))) {
+          localStorage.removeItem(k)
+        }
       }
       sessionStorage.clear()
-      // cookie de supabase-js (au cas où)
       document.cookie.split(';').forEach(c => {
-        const name = c.trim().split('=')[0]
-        if (name.startsWith('sb-') && name.includes('-auth-token')) {
-          document.cookie = `${name}=; Max-Age=0; path=/; SameSite=Lax`
+        const n = c.trim().split('=')[0]
+        if (n.startsWith('sb-') && n.includes('-auth-token')) {
+          document.cookie = `${n}=; Max-Age=0; path=/; SameSite=Lax`
         }
       })
     } catch {}
@@ -59,12 +75,12 @@ export default function AuthBar() {
   function signOutInstant() {
     if (loading) return
     setLoading(true)
-    // on n'attend PAS le réseau : purge locale + reload immédiat
     try { hardClientLogout() } catch {}
     try { supabase.auth.signOut().catch(() => {}) } catch {}
-    // petit délai pour laisser le DOM refléter l'état, puis reload
     setTimeout(() => window.location.replace('/'), 50)
   }
+
+  const userEmail = session?.user?.email ?? null
 
   return (
     <div className="rounded-xl bg-white/10 px-3 py-2 text-sm">
@@ -80,23 +96,42 @@ export default function AuthBar() {
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           <input
             type="email"
             value={email}
             onChange={e=>setEmail(e.target.value)}
             placeholder="votre@email"
-            className="w-48 rounded-lg border border-white/20 bg-white/10 px-2 py-1 text-white placeholder-white/60 outline-none"
+            className="w-56 rounded-lg border border-white/20 bg-white/10 px-2 py-1 text-white placeholder-white/60 outline-none"
           />
-          <button
-            type="button"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); void signIn() }}
-            disabled={loading || !email}
-            className="rounded-lg bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-50"
-          >
-            {loading ? '…' : 'Se connecter'}
-          </button>
-          {msg && <span className="ml-2 text-white/90">{msg}</span>}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void signInSend() }}
+              disabled={loading || !email}
+              className="rounded-lg bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-50"
+            >
+              {loading ? '…' : 'Recevoir le code'}
+            </button>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={code}
+              onChange={e=>setCode(e.target.value)}
+              placeholder="Code"
+              className="w-24 rounded-lg border border-white/20 bg-white/10 px-2 py-1 text-white placeholder-white/60 outline-none"
+            />
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void signInVerify() }}
+              disabled={loading || !email || code.trim().length === 0}
+              className="rounded-lg bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-50"
+            >
+              {loading ? '…' : 'Valider'}
+            </button>
+          </div>
+          {msg && <span className="text-white/90">{msg}</span>}
         </div>
       )}
     </div>
