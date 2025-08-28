@@ -10,6 +10,11 @@ type Member = {
 }
 
 const PAGE = 50
+const withTimeout = <T,>(p: Promise<T>, ms = 10000) =>
+  Promise.race<T>([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+  ]) as Promise<T>
 
 export default function MembersDialog({
   open,
@@ -22,20 +27,15 @@ export default function MembersDialog({
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(true)
 
-  // Fallback builder for photo from public bucket
   const photoFromBucket = (lic: string) => {
     const { data } = supabase.storage.from('photos').getPublicUrl(`members/${lic}.jpg`)
     return data.publicUrl
   }
 
-  // Rows affichés = filtrés (pas de membres “vides”) + photo fallback
   const displayRows = useMemo(() => {
     return rows
       .filter(m => (m.last_name && m.last_name.trim()) || (m.first_name && m.first_name.trim()))
-      .map(m => ({
-        ...m,
-        _photo: m.photo_url || photoFromBucket(m.licence_no),
-      }))
+      .map(m => ({ ...m, _photo: m.photo_url || photoFromBucket(m.licence_no) }))
   }, [rows])
 
   async function load(reset = false) {
@@ -45,32 +45,33 @@ export default function MembersDialog({
       const from = reset ? 0 : page * PAGE
       const to = from + PAGE - 1
 
-      let query = supabase
+      let qy = supabase
         .from('members')
         .select('licence_no, last_name, first_name, photo_url', { count: 'exact' })
-        .order('last_name', { ascending: true, nullsFirst: false })
-        .order('first_name', { ascending: true, nullsFirst: false })
+        .order('last_name', { ascending: true })
+        .order('first_name', { ascending: true })
         .range(from, to)
 
       if (q.trim()) {
         const s = q.trim()
-        query = query.or(`last_name.ilike.%${s}%,first_name.ilike.%${s}%,licence_no.ilike.%${s}%`)
+        qy = qy.or(`last_name.ilike.%${s}%,first_name.ilike.%${s}%,licence_no.ilike.%${s}%`)
       }
 
-      const { data, error, count } = await query
-      if (error) throw error
+      const res = await withTimeout(qy.throwOnError(), 10000)
+      const newRows = (res.data || []) as Member[]
+      const count = res.count ?? 0
 
-      const newRows = (data || []) as Member[]
       if (reset) {
         setRows(newRows)
         setPage(1)
-        setHasMore((count ?? 0) > newRows.length)
+        setHasMore(count > newRows.length)
       } else {
         setRows(prev => [...prev, ...newRows])
         setPage(prev => prev + 1)
-        setHasMore((count ?? 0) > (rows.length + newRows.length))
+        setHasMore(count > (rows.length + newRows.length))
       }
     } catch (e: any) {
+      console.error('members load failed', e)
       setError(e?.message || String(e))
     } finally {
       setLoading(false)

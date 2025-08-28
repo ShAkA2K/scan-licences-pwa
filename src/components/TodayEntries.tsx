@@ -12,6 +12,11 @@ function todayParisISODate(): string {
 function hhmm(parisDateTime: string) {
   return parisDateTime.split(' ')[1] || parisDateTime
 }
+const withTimeout = <T,>(p: Promise<T>, ms = 10000) =>
+  Promise.race<T>([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+  ]) as Promise<T>
 
 export default function TodayEntries({ sessionId }: { sessionId: string }) {
   const [rows, setRows] = useState<Array<EntryRow & { member?: Member }>>([])
@@ -25,24 +30,26 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
   async function load() {
     setLoading(true); setErr(null)
     try {
-      const { data: entries, error: e1 } = await supabase
+      const q1 = supabase
         .from('entries')
         .select('licence_no, recorded_at:timestamp, entry_day, source_url')
         .eq('session_id', sessionId)
         .eq('entry_day', today)
         .order('timestamp', { ascending: true })
-      if (e1) throw e1
-      const E = (entries || []) as (EntryRow & { entry_day: string })[]
+
+      const res1 = await withTimeout(q1.throwOnError(), 10000)
+      const E = (res1.data || []) as (EntryRow & { entry_day: string })[]
 
       const licences = Array.from(new Set(E.map(x => x.licence_no))).filter(Boolean)
       let M = new Map<string, Member>()
       if (licences.length) {
-        const { data: members, error: e2 } = await supabase
+        const q2 = supabase
           .from('members')
           .select('licence_no, last_name, first_name, photo_url')
           .in('licence_no', licences)
-        if (e2) throw e2
-        for (const m of (members || []) as Member[]) M.set(m.licence_no, m)
+
+        const res2 = await withTimeout(q2.throwOnError(), 10000)
+        for (const m of (res2.data || []) as Member[]) M.set(m.licence_no, m)
       }
 
       setRows(
@@ -53,6 +60,7 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
         }))
       )
     } catch (e: any) {
+      console.error('entries load failed', e)
       setErr(e?.message || String(e))
     } finally {
       setLoading(false)
@@ -65,13 +73,13 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
     if (!confirm(`Supprimer l'enregistrement de ${licence_no} ?`)) return
     setBusyId(licence_no)
     try {
-      const { error } = await supabase
+      const q = supabase
         .from('entries')
         .delete()
         .eq('session_id', sessionId)
         .eq('licence_no', licence_no)
         .eq('entry_day', today)
-      if (error) throw error
+      await withTimeout(q.throwOnError(), 10000)
       await load()
     } catch (e: any) {
       alert('Suppression impossible: ' + (e?.message || String(e)))
@@ -82,11 +90,8 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
 
   function openSource(url?: string | null) {
     if (!url) return
-    try {
-      window.open(url, '_blank', 'noopener,noreferrer')
-    } catch {
-      location.href = url // fallback
-    }
+    try { window.open(url, '_blank', 'noopener,noreferrer') }
+    catch { location.href = url }
   }
 
   return (
