@@ -4,7 +4,13 @@ import { formatParisDateTime } from '../lib/season'
 import { RefreshCw, Trash2, User2, ExternalLink } from 'lucide-react'
 
 type EntryRow = { licence_no: string; recorded_at: string; source_url: string | null }
-type Member = { licence_no: string; last_name: string | null; first_name: string | null; photo_url: string | null }
+type Member = {
+  licence_no: string
+  last_name: string | null
+  first_name: string | null
+  photo_url: string | null
+  valid_flag: boolean | null
+}
 
 function todayParisISODate(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
@@ -41,7 +47,7 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
       if (licences.length) {
         const q2 = supabase
           .from('members')
-          .select('licence_no, last_name, first_name, photo_url')
+          .select('licence_no, last_name, first_name, photo_url, valid_flag')
           .in('licence_no', licences)
         const res2 = await withTimeout(q2.throwOnError(), 10000)
         for (const m of (res2.data || []) as Member[]) M.set(m.licence_no, m)
@@ -113,6 +119,12 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
 
         {!loading && !err && rows.map(r => {
           const full = `${r.member?.last_name || ''} ${r.member?.first_name || ''}`.trim()
+          const badge = typeof r.member?.valid_flag === 'boolean'
+            ? (r.member.valid_flag ? 'bg-emerald-500' : 'bg-red-500')
+            : 'bg-gray-300'
+          const badgeTitle = typeof r.member?.valid_flag === 'boolean'
+            ? (r.member.valid_flag ? 'Licence valide' : 'Licence invalide')
+            : 'Validité inconnue'
           return (
             <div key={`${r.licence_no}-${r.recorded_at}`} className="rounded-xl border bg-white p-3">
               <div className="flex items-center gap-3">
@@ -124,7 +136,10 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
                   </div>
                 )}
                 <div className="min-w-0">
-                  <div className="font-medium text-gray-900 truncate">{full || '—'}</div>
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-block h-2.5 w-2.5 rounded-full ring-2 ring-white ${badge}`} title={badgeTitle}/>
+                    <div className="font-medium text-gray-900 truncate">{full || '—'}</div>
+                  </div>
                   <div className="text-xs text-gray-500">{r.licence_no}</div>
                 </div>
                 <div className="ml-auto text-sm font-medium">{hhmm(r.recorded_at)}</div>
@@ -160,18 +175,25 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Tireur</th>
                 <th className="px-3 py-2 text-left font-medium">Licence</th>
+                <th className="px-3 py-2 text-left font-medium">Validité</th>
                 <th className="px-3 py-2 text-left font-medium">Heure</th>
                 <th className="px-3 py-2 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td className="px-3 py-4" colSpan={4}>Chargement…</td></tr>}
-              {!loading && err && <tr><td className="px-3 py-4 text-red-600" colSpan={4}>Erreur: {err}</td></tr>}
-              {!loading && !err && rows.length === 0 && <tr><td className="px-3 py-4" colSpan={4}>Aucune entrée aujourd’hui.</td></tr>}
+              {loading && <tr><td className="px-3 py-4" colSpan={5}>Chargement…</td></tr>}
+              {!loading && err && <tr><td className="px-3 py-4 text-red-600" colSpan={5}>Erreur: {err}</td></tr>}
+              {!loading && !err && rows.length === 0 && <tr><td className="px-3 py-4" colSpan={5}>Aucune entrée aujourd’hui.</td></tr>}
 
               {rows.map(r => {
                 const full = `${r.member?.last_name || ''} ${r.member?.first_name || ''}`.trim()
                 const canOpen = !!r.source_url
+                const badge = typeof r.member?.valid_flag === 'boolean'
+                  ? (r.member.valid_flag ? 'bg-emerald-500' : 'bg-red-500')
+                  : 'bg-gray-300'
+                const label = typeof r.member?.valid_flag === 'boolean'
+                  ? (r.member.valid_flag ? 'Valide' : 'Invalide')
+                  : 'Inconnue'
                 return (
                   <tr key={`${r.licence_no}-${r.recorded_at}`} className="border-t">
                     <td className="px-3 py-2">
@@ -183,13 +205,21 @@ export default function TodayEntries({ sessionId }: { sessionId: string }) {
                             {(r.member?.last_name?.[0] || r.licence_no[0] || '').toUpperCase()}
                           </div>
                         )}
-                        <div>
-                          <div className="font-medium text-gray-900">{full || '—'}</div>
-                          <div className="text-xs text-gray-500">{r.licence_no}</div>
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-block h-2.5 w-2.5 rounded-full ring-2 ring-white ${badge}`} title={`Licence ${label}`}/>
+                          <div>
+                            <div className="font-medium text-gray-900">{full || '—'}</div>
+                            <div className="text-xs text-gray-500">{r.licence_no}</div>
+                          </div>
                         </div>
                       </div>
                     </td>
                     <td className="px-3 py-2">{r.licence_no}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${label==='Valide'?'bg-emerald-100 text-emerald-800':'bg-red-100 text-red-800'}`}>
+                        {label}
+                      </span>
+                    </td>
                     <td className="px-3 py-2">{hhmm(r.recorded_at)}</td>
                     <td className="px-3 py-2 text-right">
                       <div className="inline-flex items-center gap-2">

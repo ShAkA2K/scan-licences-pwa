@@ -3,11 +3,11 @@ import { addScan } from '../lib/add-scan'
 import { Camera, CameraOff, CheckCircle2, Flashlight, Loader2, RefreshCw, RotateCw } from 'lucide-react'
 import { BrowserMultiFormatReader, IScannerControls } from '@zxing/browser'
 
-type Props = { sessionId: string }
+type Props = { sessionId: string; continuous?: boolean }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const canVibrate = typeof navigator !== 'undefined' && 'vibrate' in navigator
 
-export default function QrScanBox({ sessionId }: Props) {
+export default function QrScanBox({ sessionId, continuous = false }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [active, setActive] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -49,8 +49,15 @@ export default function QrScanBox({ sessionId }: Props) {
       setMsg('Erreur: ' + (e?.message || String(e)))
     } finally {
       setBusy(false)
-      stop()
-      await sleep(700)
+      if (continuous) {
+        // relance dans 600ms
+        await sleep(600)
+        setMsg(null)
+        await start()
+      } else {
+        stop()
+        await sleep(700)
+      }
     }
   }
 
@@ -72,7 +79,7 @@ export default function QrScanBox({ sessionId }: Props) {
       return
     }
 
-    // Native API si dispo
+    // BarcodeDetector si dispo
     const BD: any = (window as any).BarcodeDetector
     if (BD) {
       try {
@@ -101,12 +108,7 @@ export default function QrScanBox({ sessionId }: Props) {
       zxingControls.current = await reader.decodeFromVideoDevice(
         deviceId || undefined,
         videoRef.current!,
-        (result) => {
-          if (result) {
-            const txt = result.getText()
-            if (txt) handleDecoded(txt)
-          }
-        }
+        (result) => { if (result) { const txt = result.getText(); if (txt) handleDecoded(txt) } }
       )
     } catch {
       setError('Impossible de démarrer le décodage.')
@@ -145,77 +147,44 @@ export default function QrScanBox({ sessionId }: Props) {
               disabled={active}
               title="Choisir la caméra"
             >
-              {devices.map(d => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label || 'Caméra'}</option>
-              ))}
+              {devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || 'Caméra'}</option>)}
             </select>
           )}
           {!active ? (
-            <button
-              onClick={start}
-              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 active:translate-y-[1px]"
-            >
+            <button onClick={start} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 active:translate-y-[1px]">
               <Camera className="h-4 w-4" /> Démarrer
             </button>
           ) : (
-            <button
-              onClick={stop}
-              className="inline-flex items-center gap-2 rounded-xl border px-4 py-2 hover:bg-gray-50"
-            >
+            <button onClick={stop} className="inline-flex items-center gap-2 rounded-xl border px-4 py-2 hover:bg-gray-50">
               <CameraOff className="h-4 w-4" /> Arrêter
             </button>
           )}
         </div>
       </div>
 
-      {/* Preview vidéo — plein écran mobile */}
       <div className="relative overflow-hidden rounded-xl border bg-black">
-        <video
-          ref={videoRef}
-          className="w-full h-[54vh] sm:h-[48vh] object-cover"
-          muted
-          playsInline
-        />
-        {/* Cadre de visée */}
+        <video ref={videoRef} className="w-full h-[54vh] sm:h-[48vh] object-cover" muted playsInline />
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="h-44 w-44 sm:h-56 sm:w-56 rounded-xl border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,.35)]" />
         </div>
-        {/* Actions overlay en bas à droite */}
         {active && (
           <div className="absolute bottom-2 right-2 flex gap-2">
-            <button
-              onClick={toggleTorch}
-              className="inline-flex items-center gap-2 rounded-xl border bg-white/90 px-3 py-1.5 text-sm hover:bg-white"
-              title="Lampe"
-            >
+            <button onClick={toggleTorch} className="inline-flex items-center gap-2 rounded-xl border bg-white/90 px-3 py-1.5 text-sm hover:bg-white" title="Lampe">
               <Flashlight className={`h-4 w-4 ${torchOn ? 'text-amber-600' : ''}`} /> Lampe
             </button>
-            <button
-              onClick={() => { stop(); start() }}
-              className="inline-flex items-center gap-2 rounded-xl border bg-white/90 px-3 py-1.5 text-sm hover:bg-white"
-              title="Relancer"
-            >
+            <button onClick={() => { stop(); start() }} className="inline-flex items-center gap-2 rounded-xl border bg-white/90 px-3 py-1.5 text-sm hover:bg-white" title="Relancer">
               <RefreshCw className="h-4 w-4" /> Relancer
             </button>
           </div>
         )}
       </div>
 
-      {/* Messages */}
-      {busy && <div className="inline-flex items-center gap-2 text-sm">
-        <Loader2 className="h-4 w-4 animate-spin" /> Traitement…
-      </div>}
-      {msg && <div className="inline-flex items-center gap-2 text-sm text-emerald-700">
-        <CheckCircle2 className="h-4 w-4" /> {msg}
-      </div>}
+      {busy && <div className="inline-flex items-center gap-2 text-sm"><Loader2 className="h-4 w-4 animate-spin" /> Traitement…</div>}
+      {msg && <div className="inline-flex items-center gap-2 text-sm text-emerald-700"><CheckCircle2 className="h-4 w-4" /> {msg}</div>}
       {error && <div className="text-sm text-red-600">{error}</div>}
 
       {!active && !busy && (
-        <button
-          onClick={start}
-          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2 hover:bg-gray-50"
-          title="Scanner un autre QR"
-        >
+        <button onClick={start} className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2 hover:bg-gray-50" title="Scanner un autre QR">
           <RotateCw className="h-4 w-4" /> Scanner un autre QR
         </button>
       )}
