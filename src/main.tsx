@@ -5,6 +5,7 @@ import ReactDOM from 'react-dom/client'
 import ErrorBoundary from './components/ErrorBoundary'
 import { supabase } from './data/supabase'
 
+/** Écran de login (magic link) pour éviter tout écran vide si pas de session) */
 function LoginScreen() {
   const [email, setEmail] = React.useState('')
   const [sent, setSent] = React.useState(false)
@@ -50,7 +51,27 @@ function LoginScreen() {
   )
 }
 
-// clear SW & caches via ?clear-sw (secours)
+/** Écran diagnostic lisible si la sonde Supabase échoue (évite le blanc) */
+function DiagScreen({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'linear-gradient(180deg,#2563eb,#1d4ed8)',padding:16}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,boxShadow:'0 10px 30px rgba(0,0,0,.15)',maxWidth:760,width:'100%'}}>
+        <h1 style={{margin:0,fontSize:18}}>{title}</h1>
+        {detail && (
+          <pre style={{whiteSpace:'pre-wrap',background:'#fef2f2',color:'#991b1b',borderRadius:8,padding:8,marginTop:10}}>
+            {detail}
+          </pre>
+        )}
+        <div style={{marginTop:10,color:'#334155',fontSize:14}}>
+          Vérifie sur Vercel les variables <code>VITE_SUPABASE_URL</code> et <code>VITE_SUPABASE_ANON_KEY</code> (Production),
+          et les politiques RLS en prod. Essaie aussi <code>/?clear-sw</code>.
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Secours : purge SW/caches via ?clear-sw
 async function maybeClearSW() {
   if (!location.search.includes('clear-sw')) return false
   try {
@@ -73,43 +94,61 @@ async function maybeClearSW() {
 window.addEventListener('error', (e) => console.error('window.onerror', e?.error || e?.message || e))
 window.addEventListener('unhandledrejection', (e) => console.error('unhandledrejection', e?.reason || e))
 
+/** Monte un composant React de manière sûre */
+function render(element: React.ReactNode) {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <ErrorBoundary>{element}</ErrorBoundary>
+    </React.StrictMode>
+  )
+}
+
 async function boot() {
   if (await maybeClearSW()) return
 
-  // 1) On regarde s’il existe une session
+  // 1) Session ?
   let { data: { session } } = await supabase.auth.getSession()
-
-  // 2) On monte soit la LoginScreen, soit l’app
   if (!session) {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
-      <React.StrictMode>
-        <ErrorBoundary>
-          <LoginScreen />
-        </ErrorBoundary>
-      </React.StrictMode>
-    )
-    // 3) On écoute l’auth et on remonte l’app dès qu’on reçoit la session
-    supabase.auth.onAuthStateChange(async (_event, sess) => {
-      if (sess) mountApp()
-    })
+    render(<LoginScreen />)
+    // attend l’auth pour monter l’app
+    supabase.auth.onAuthStateChange((_evt, sess) => { if (sess) safeMountApp() })
   } else {
-    mountApp()
+    safeMountApp()
   }
 }
 
-async function mountApp() {
-  // import dynamique d'App et de l’AuthProvider (pour éviter un crash au boot)
-  const App = (await import('./App')).default
-  const { AuthProvider } = await import('./auth/AuthProvider')
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <ErrorBoundary>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
-      </ErrorBoundary>
-    </React.StrictMode>
-  )
+/** Sonde Supabase AVANT de charger App : si ça plante, on affiche Diag */
+async function safeMountApp() {
+  try {
+    // 2) Test court: lire 1 ligne (ou 0) sans casser l’UI si table vide
+    // Choisis une table accessible aux utilisateurs connectés (ex: sessions)
+    const probe = await supabase.from('sessions').select('id').limit(1)
+    if (probe.error) {
+      render(<DiagScreen title="Sonde Supabase en échec" detail={`${probe.error.message}\n(code: ${(probe.error as any).code || 'N/A'})`} />)
+      return
+    }
+
+    // 3) Si la sonde passe, on importe App et AuthProvider
+    const App = (await import('./App')).default
+    const { AuthProvider } = await import('./auth/AuthProvider')
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    )
+
+    // 4) Sécurité : si l’app ne rend “rien” (root vide) au bout de 1s -> diag
+    setTimeout(() => {
+      const root = document.getElementById('root') as HTMLElement
+      if (!root || root.childElementCount === 0) {
+        render(<DiagScreen title="App a rendu un écran vide" detail={'Le composant App() ne produit aucun contenu.\nVérifie App.tsx et ses imports.'} />)
+      }
+    }, 1000)
+
+  } catch (e: any) {
+    render(<DiagScreen title="Erreur de démarrage" detail={e?.message || String(e)} />)
+  }
 }
 
 boot()
