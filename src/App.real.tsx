@@ -3,15 +3,36 @@ import React from 'react'
 import { supabase } from './data/supabase'
 import { getTodaySession, openTodaySession, parisDateStr } from './lib/session'
 
-// --- Types simples ---
+// -----------------------
+// Types
+// -----------------------
 type SessionRow = { id: string; date: string }
-type EntryRow = { id: string; session_id: string; licence_no: string; created_at: string; source_url?: string | null }
+type EntryRow = { id: string; session_id: string; licence_no: string; created_at?: string; source_url?: string | null }
 type Member = { licence_no: string; first_name: string | null; last_name: string | null; photo_url: string | null; source_url?: string | null }
+type ExportFormat = 'pdf' | 'xlsx' | 'csv'
 
-// --- Utils UI ---
-function cls(...parts: (string | false | undefined | null)[]) {
-  return parts.filter(Boolean).join(' ')
+// -----------------------
+// Utils UI
+// -----------------------
+function cls(...parts: (string | false | undefined | null)[]) { return parts.filter(Boolean).join(' ') }
+
+function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh' | 'external' | 'plus' | 'scan' | 'download'; className?: string }) {
+  const path =
+    name === 'user' ? "M12 12a5 5 0 100-10 5 5 0 000 10zm-9 9a9 9 0 1118 0H3z" :
+    name === 'list' ? "M4 6h16M4 12h16M4 18h7" :
+    name === 'logout' ? "M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6A2.25 2.25 0 005.25 5.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" :
+    name === 'refresh' ? "M4 4v6h6M20 20v-6h-6M20 8a8 8 0 10-3.3 6.5" :
+    name === 'external' ? "M10 6h8m0 0v8m0-8L9 15" :
+    name === 'plus' ? "M12 4v16m8-8H4" :
+    name === 'download' ? "M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" :
+    /* scan */       "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 002 2h2M21 17v2a2 2 0 01-2 2h-2"
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={cls("h-5 w-5 stroke-[2] stroke-current", className)}>
+      <path d={path} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }
+
 function Avatar({ member }: { member: Member }) {
   const label = `${member.first_name ?? ''} ${member.last_name ?? ''}`.trim() || member.licence_no
   const initial = (member.last_name?.[0] || member.first_name?.[0] || member.licence_no?.[0] || '?').toUpperCase()
@@ -24,34 +45,64 @@ function Avatar({ member }: { member: Member }) {
     </div>
   )
 }
-function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh' | 'external' | 'plus' | 'scan'; className?: string }) {
-  const path =
-    name === 'user' ? "M12 12a5 5 0 100-10 5 5 0 000 10zm-9 9a9 9 0 1118 0H3z" :
-    name === 'list' ? "M4 6h16M4 12h16M4 18h7" :
-    name === 'logout' ? "M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6A2.25 2.25 0 005.25 5.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" :
-    name === 'refresh' ? "M4 4v6h6M20 20v-6h-6M20 8a8 8 0 10-3.3 6.5" :
-    name === 'external' ? "M10 6h8m0 0v8m0-8L9 15" :
-    name === 'plus' ? "M12 4v16m8-8H4" :
-    /* scan */       "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 002 2h2M21 17v2a2 2 0 01-2 2h-2"
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={cls("h-5 w-5 stroke-[2] stroke-current", className)}>
-      <path d={path} strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
+
+// -----------------------
+// Export helper (tolérant)
+// -----------------------
+async function exportRows(format: ExportFormat, filename: string, rows: Array<{ last_name: string; first_name: string; licence_no: string; created_at: string }>) {
+  try {
+    const mod: any = await import('./lib/exporters')
+    // Essaye signatures fréquentes
+    if (format === 'pdf') {
+      if (typeof mod.exportRowsToPdf === 'function') return mod.exportRowsToPdf(filename, rows)
+      if (typeof mod.exportEntriesToPdf === 'function') return mod.exportEntriesToPdf(filename, rows)
+      if (typeof mod.exportToPdf === 'function') return mod.exportToPdf(filename, rows)
+    }
+    if (format === 'xlsx') {
+      if (typeof mod.exportRowsToXlsx === 'function') return mod.exportRowsToXlsx(filename, rows)
+      if (typeof mod.exportEntriesToXlsx === 'function') return mod.exportEntriesToXlsx(filename, rows)
+      if (typeof mod.exportToXlsx === 'function') return mod.exportToXlsx(filename, rows)
+    }
+    if (format === 'csv') {
+      if (typeof mod.exportRowsToCsv === 'function') return mod.exportRowsToCsv(filename, rows)
+      if (typeof mod.exportEntriesToCsv === 'function') return mod.exportEntriesToCsv(filename, rows)
+      if (typeof mod.exportToCsv === 'function') return mod.exportToCsv(filename, rows)
+    }
+  } catch {
+    // pas de lib exporters → on tombe sur CSV simple
+  }
+  // Fallback CSV simple
+  const header = 'Nom;Prénom;Licence;Horodatage'
+  const body = rows.map(r => [
+    (r.last_name || '').replace(/;/g, ','),
+    (r.first_name || '').replace(/;/g, ','),
+    r.licence_no,
+    new Date(r.created_at).toLocaleString('fr-FR')
+  ].join(';')).join('\n')
+  const blob = new Blob([header + '\n' + body], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `${filename}.csv`
+  a.click()
+  URL.revokeObjectURL(a.href)
 }
 
-// --- HOME (session + entrées du jour) ---
+// -----------------------
+// Vues
+// -----------------------
 function HomeView() {
   const [loading, setLoading] = React.useState(true)
   const [sess, setSess] = React.useState<SessionRow | null>(null)
   const [err, setErr] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
 
-  // Entrées du jour + map membres
+  // Entrées du jour
   const [entries, setEntries] = React.useState<(EntryRow & { member?: Member | null })[]>([])
   const [loadingEntries, setLoadingEntries] = React.useState(false)
-  const [addingUrl, setAddingUrl] = React.useState(false)
+
+  // Ajout via URL (fallback avant le scan)
   const [url, setUrl] = React.useState('')
+  const [addingUrl, setAddingUrl] = React.useState(false)
   const [hint, setHint] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -78,12 +129,11 @@ function HomeView() {
   async function loadEntries(sessionId: string, alive = true) {
     try {
       setLoadingEntries(true)
-      // 1) entries de la session
-      const { data: ent, error: e1 } = await supabase
-        .from('entries')
+      const sel = supabase.from('entries')
         .select('id, session_id, licence_no, created_at, source_url')
         .eq('session_id', sessionId)
         .order('created_at', { ascending: false })
+      const { data: ent, error: e1 } = await sel
       if (e1) throw e1
 
       const lis = Array.from(new Set((ent ?? []).map(x => x.licence_no))).filter(Boolean)
@@ -126,23 +176,27 @@ function HomeView() {
     if (!url.trim()) return
     setAddingUrl(true); setHint(null)
     try {
-      // Appelle ta Edge Function pour enrichir et stocker le membre
-      const { data, error } = await supabase.functions.invoke('itac_profile_store', { body: { url } })
-      if (error) throw error
-      // data attendu : { ok, licence_no, first_name, last_name, photo_url, source_url, valid_flag, ... }
-      if (!data?.licence_no) {
-        throw new Error('Réponse invalide de la fonction (licence_no manquant)')
+      const res = await supabase.functions.invoke('itac_profile_store', { body: { url } })
+      if (res.error) {
+        const status = (res.error as any)?.context?.response?.status
+        throw new Error(`Edge function ${status ?? ''}: ${res.error.message}`)
       }
-      // Insert l’entrée
+      const payload = res.data as any
+      if (!payload?.ok) throw new Error(payload?.error || 'Edge function non-OK')
+
       const ins = await supabase.from('entries').insert({
         session_id: sess.id,
-        licence_no: data.licence_no,
-        source_url: data.source_url ?? url
+        licence_no: payload.licence_no,
+        source_url: payload.source_url ?? url
       }).select('id, session_id, licence_no, created_at, source_url').single()
+
       if (ins.error) {
-        // ignore doublon jour si contrainte côté BDD
-        if ((ins.error as any).code !== '23505') throw ins.error
-        setHint("Déjà enregistré aujourd’hui pour cette session.")
+        // doublon journalier (23505) => on affiche juste l’info
+        if ((ins.error as any).code === '23505') {
+          setHint("Déjà enregistré aujourd’hui pour cette session.")
+        } else {
+          throw ins.error
+        }
       }
       setUrl('')
       await loadEntries(sess.id)
@@ -155,15 +209,16 @@ function HomeView() {
 
   function RowEntry({ row }: { row: EntryRow & { member?: Member | null } }) {
     const m = row.member
-    const label = m ? `${m.last_name ?? ''} ${m.first_name ?? ''}`.trim() : row.licence_no
+    const label = [m?.last_name, m?.first_name].filter(Boolean).join(' ') || row.licence_no
     const sub = m ? row.licence_no : '—'
+    const time = row.created_at ? new Date(row.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'
     const link = (m?.source_url || row.source_url || null)
     return (
       <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50">
         <Avatar member={{ licence_no: row.licence_no, first_name: m?.first_name ?? null, last_name: m?.last_name ?? null, photo_url: m?.photo_url ?? null, source_url: m?.source_url ?? undefined }} />
         <div className="min-w-0 flex-1">
-          <div className="font-medium truncate">{label || row.licence_no}</div>
-          <div className="text-xs text-slate-500">{new Date(row.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} • {sub}</div>
+          <div className="font-medium truncate">{label}</div>
+          <div className="text-xs text-slate-500">{time} • {sub}</div>
         </div>
         {link && (
           <button
@@ -178,90 +233,82 @@ function HomeView() {
     )
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-[60vh] grid place-items-center">
-        <div className="rounded-xl bg-white p-4 shadow ring-1 ring-black/5">Chargement…</div>
-      </div>
-    )
-  }
-
-  if (!sess) {
-    return (
-      <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <div className="text-sm text-slate-500">Nous sommes le</div>
-            <div className="font-semibold">{parisDateStr()} (Europe/Paris)</div>
-          </div>
-          <button
-            onClick={handleOpenSession}
-            disabled={busy}
-            className="rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
-          >
-            {busy ? '…' : (<span className="inline-flex items-center gap-2"><Icon name="plus" /> Ouvrir la session du jour</span>)}
-          </button>
-        </div>
-        {err && <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">Erreur: {err}</div>}
-      </div>
-    )
-  }
-
+  // Rendu
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <div className="text-sm text-slate-500">Session du jour</div>
-            <div className="font-semibold">{sess.date} — <span className="text-slate-500">id:</span> {sess.id}</div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => loadEntries(sess.id)} className="rounded-lg bg-white px-3 py-1.5 hover:bg-gray-100 ring-1 ring-gray-200 text-sm">
-              <span className="inline-flex items-center gap-2"><Icon name="refresh" /> Rafraîchir</span>
+      {!sess ? (
+        <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <div className="text-sm text-slate-500">Nous sommes le</div>
+              <div className="font-semibold">{parisDateStr()} (Europe/Paris)</div>
+            </div>
+            <button
+              onClick={handleOpenSession}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              {busy ? '…' : (<><Icon name="plus" /> Ouvrir la session du jour</>)}
             </button>
           </div>
+          {err && <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">Erreur: {err}</div>}
         </div>
+      ) : (
+        <>
+          <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+              <div>
+                <div className="text-sm text-slate-500">Session du jour</div>
+                <div className="font-semibold">{sess.date} — <span className="text-slate-500">id:</span> {sess.id}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => loadEntries(sess.id)} className="rounded-lg bg-white px-3 py-1.5 hover:bg-gray-100 ring-1 ring-gray-200 text-sm">
+                  <span className="inline-flex items-center gap-2"><Icon name="refresh" /> Rafraîchir</span>
+                </button>
+              </div>
+            </div>
 
-        {/* Ajout par URL (fallback avant le scan QR) */}
-        <form onSubmit={addByUrl} className="mt-3 grid gap-2 md:flex">
-          <input
-            type="url"
-            required
-            placeholder="Coller l’URL du QR (ex: https://itac.pro/F.aspx?... )"
-            value={url}
-            onChange={(e)=>setUrl(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2"
-          />
-          <button
-            type="submit"
-            disabled={addingUrl}
-            className="rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
-            title="Ajouter une entrée via l’URL"
-          >
-            {addingUrl ? '…' : (<span className="inline-flex items-center gap-2"><Icon name="plus" /> Ajouter</span>)}
-          </button>
-        </form>
-        {hint && <div className="mt-2 text-sm text-amber-800 bg-amber-50 p-2 rounded">{hint}</div>}
-        {err && <div className="mt-2 text-sm text-red-800 bg-red-50 p-2 rounded">Erreur: {err}</div>}
-      </div>
-
-      <div className="rounded-2xl bg-white p-2 shadow ring-1 ring-black/5">
-        <div className="px-2 py-2 font-semibold">Entrées du {sess.date}</div>
-        {loadingEntries ? (
-          <div className="px-2 py-6 text-slate-500">Chargement…</div>
-        ) : entries.length === 0 ? (
-          <div className="px-2 py-6 text-slate-500">Aucune entrée pour l’instant.</div>
-        ) : (
-          <div className="divide-y divide-slate-100">
-            {entries.map((row) => <RowEntry key={row.id} row={row} />)}
+            {/* Ajout par URL */}
+            <form onSubmit={addByUrl} className="mt-3 grid gap-2 md:flex">
+              <input
+                type="url"
+                required
+                placeholder="Coller l’URL du QR (ex: https://itac.pro/F.aspx?... )"
+                value={url}
+                onChange={(e)=>setUrl(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+              <button
+                type="submit"
+                disabled={addingUrl}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
+                title="Ajouter une entrée via l’URL"
+              >
+                {addingUrl ? '…' : (<><Icon name="plus" /> Ajouter</>)}
+              </button>
+            </form>
+            {hint && <div className="mt-2 text-sm text-amber-800 bg-amber-50 p-2 rounded">{hint}</div>}
+            {err && <div className="mt-2 text-sm text-red-800 bg-red-50 p-2 rounded">Erreur: {err}</div>}
           </div>
-        )}
-      </div>
+
+          <div className="rounded-2xl bg-white p-2 shadow ring-1 ring-black/5">
+            <div className="px-2 py-2 font-semibold">Entrées du {sess.date}</div>
+            {loadingEntries ? (
+              <div className="px-2 py-6 text-slate-500">Chargement…</div>
+            ) : entries.length === 0 ? (
+              <div className="px-2 py-6 text-slate-500">Aucune entrée pour l’instant.</div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {entries.map((row) => <RowEntry key={row.id} row={row} />)}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
 
-// --- MEMBRES (liste + recherche + clic ouvre page licence) ---
 function MembersView() {
   const [q, setQ] = React.useState('')
   const [rows, setRows] = React.useState<Member[]>([])
@@ -273,7 +320,6 @@ function MembersView() {
     ;(async () => {
       try {
         setLoading(true)
-        // récupère tout; si volumineux, on pourra paginer
         const { data, error } = await supabase
           .from('members')
           .select('licence_no, first_name, last_name, photo_url, source_url')
@@ -348,9 +394,204 @@ function MembersView() {
   )
 }
 
-// --- APP (nav + vues) ---
+function SessionsView() {
+  const [sessions, setSessions] = React.useState<SessionRow[]>([])
+  const [loading, setLoading] = React.useState(true)
+  const [err, setErr] = React.useState<string | null>(null)
+
+  // format global pour les exports de session
+  const [fmt, setFmt] = React.useState<ExportFormat>('pdf')
+
+  // Export saison
+  const [season, setSeason] = React.useState<string>(computeDefaultSeasonLabel())
+  const [seasonFmt, setSeasonFmt] = React.useState<ExportFormat>('xlsx')
+  const [busySeason, setBusySeason] = React.useState(false)
+
+  React.useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        setLoading(true)
+        const { data, error } = await supabase
+          .from('sessions')
+          .select('id, date')
+          .order('date', { ascending: false })
+        if (error) throw error
+        if (!alive) return
+        setSessions((data ?? []) as SessionRow[])
+        setErr(null)
+      } catch (e: any) {
+        if (!alive) return
+        setErr(e?.message || String(e))
+      } finally {
+        if (!alive) return
+        setLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  async function exportOne(session: SessionRow) {
+    try {
+      // entries de la session
+      const { data: ent, error: e1 } = await supabase
+        .from('entries')
+        .select('licence_no, created_at')
+        .eq('session_id', session.id)
+        .order('created_at', { ascending: true })
+      if (e1) throw e1
+      const licences = Array.from(new Set((ent ?? []).map(x => x.licence_no))).filter(Boolean)
+
+      let membersByLic: Record<string, Member> = {}
+      if (licences.length) {
+        const { data: mem, error: e2 } = await supabase
+          .from('members')
+          .select('licence_no, first_name, last_name')
+          .in('licence_no', licences)
+        if (e2) throw e2
+        membersByLic = Object.fromEntries((mem ?? []).map(m => [m.licence_no, m as Member]))
+      }
+
+      const rows = (ent ?? []).map(e => ({
+        last_name: membersByLic[e.licence_no]?.last_name ?? '',
+        first_name: membersByLic[e.licence_no]?.first_name ?? '',
+        licence_no: e.licence_no,
+        created_at: e.created_at || new Date().toISOString()
+      }))
+      await exportRows(fmt, `session-${session.date}`, rows)
+    } catch (e: any) {
+      alert(`Export session: ${e?.message || e}`)
+    }
+  }
+
+  async function exportSeason() {
+    try {
+      setBusySeason(true)
+      const { start, end } = computeSeasonRange(season)
+      // entries entre start/end
+      const { data: ent, error: e1 } = await supabase
+        .from('entries')
+        .select('licence_no, created_at')
+        .gte('created_at', start)
+        .lt('created_at', end)
+        .order('created_at', { ascending: true })
+      if (e1) throw e1
+      const licences = Array.from(new Set((ent ?? []).map(x => x.licence_no))).filter(Boolean)
+      let membersByLic: Record<string, Member> = {}
+      if (licences.length) {
+        const { data: mem, error: e2 } = await supabase
+          .from('members')
+          .select('licence_no, first_name, last_name')
+          .in('licence_no', licences)
+        if (e2) throw e2
+        membersByLic = Object.fromEntries((mem ?? []).map(m => [m.licence_no, m as Member]))
+      }
+      const rows = (ent ?? []).map(e => ({
+        last_name: membersByLic[e.licence_no]?.last_name ?? '',
+        first_name: membersByLic[e.licence_no]?.first_name ?? '',
+        licence_no: e.licence_no,
+        created_at: e.created_at || new Date().toISOString()
+      }))
+      await exportRows(seasonFmt, `saison-${season}`, rows)
+    } catch (e: any) {
+      alert(`Export saison: ${e?.message || e}`)
+    } finally {
+      setBusySeason(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Bloc Export Saison */}
+      <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
+        <div className="grid gap-3 md:grid-cols-3">
+          <div>
+            <label className="text-sm text-slate-600">Saison</label>
+            <select value={season} onChange={e=>setSeason(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2">
+              {buildSeasonOptions().map(opt => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-sm text-slate-600">Format</label>
+            <select value={seasonFmt} onChange={e=>setSeasonFmt(e.target.value as ExportFormat)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2">
+              <option value="pdf">PDF</option>
+              <option value="xlsx">XLSX</option>
+              <option value="csv">CSV</option>
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              onClick={exportSeason}
+              disabled={busySeason}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60 w-full md:w-auto"
+            >
+              {busySeason ? '…' : (<><Icon name="download" /> Exporter la saison</>)}
+            </button>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">Colonnes : Nom, Prénom, Licence, Date & heure d’enregistrement.</p>
+      </div>
+
+      {/* Liste des sessions avec export par ligne */}
+      <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-semibold">Toutes les sessions</h3>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-600">Format</label>
+            <select value={fmt} onChange={e=>setFmt(e.target.value as ExportFormat)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm">
+              <option value="pdf">PDF</option>
+              <option value="xlsx">XLSX</option>
+              <option value="csv">CSV</option>
+            </select>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="py-6 text-slate-500">Chargement…</div>
+        ) : sessions.length === 0 ? (
+          <div className="py-6 text-slate-500">Aucune session.</div>
+        ) : (
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-600">
+                  <th className="px-2 py-2">Date</th>
+                  <th className="px-2 py-2">ID</th>
+                  <th className="px-2 py-2 text-right">Export</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sessions.map(s => (
+                  <tr key={s.id} className="hover:bg-slate-50">
+                    <td className="px-2 py-2 whitespace-nowrap">{s.date}</td>
+                    <td className="px-2 py-2">{s.id}</td>
+                    <td className="px-2 py-2 text-right">
+                      <button
+                        onClick={() => exportOne(s)}
+                        className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 ring-1 ring-slate-200 hover:bg-gray-50"
+                        title="Exporter cette session"
+                      >
+                        <Icon name="download" /> Exporter
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {err && <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">Erreur: {err}</div>}
+      </div>
+    </div>
+  )
+}
+
+// -----------------------
+// App globale + Nav
+// -----------------------
 export default function AppReal() {
-  const [view, setView] = React.useState<'home'|'members'>('home')
+  const [view, setView] = React.useState<'home'|'members'|'sessions'>('home')
 
   async function logout() {
     await supabase.auth.signOut()
@@ -390,6 +631,16 @@ export default function AppReal() {
               <Icon name="user" /> Membres
             </button>
             <button
+              onClick={() => setView('sessions')}
+              className={cls(
+                "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm",
+                view === 'sessions' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200"
+              )}
+              title="Sessions & exports"
+            >
+              <Icon name="download" /> Sessions
+            </button>
+            <button
               onClick={logout}
               className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 ring-1 ring-gray-200 hover:bg-gray-100 text-sm"
               title="Se déconnecter"
@@ -401,8 +652,33 @@ export default function AppReal() {
       </header>
 
       <main className="mx-auto max-w-5xl p-4">
-        {view === 'home' ? <HomeView /> : <MembersView />}
+        {view === 'home' ? <HomeView /> : view === 'members' ? <MembersView /> : <SessionsView />}
       </main>
     </div>
   )
+}
+
+// -----------------------
+// Saisons (utilitaires)
+// -----------------------
+function computeDefaultSeasonLabel(): string {
+  // Saison sportive FR: 1er septembre -> 31 août (N -> N+1)
+  const now = new Date()
+  const y = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1
+  return `${y}-${y+1}`
+}
+function buildSeasonOptions(): string[] {
+  const current = parseInt(computeDefaultSeasonLabel().slice(0,4), 10)
+  const years: number[] = []
+  for (let y=current+1; y>=current-2; y--) years.push(y-1) // propose quelques saisons autour
+  const labels = new Set<string>()
+  years.forEach(y => labels.add(`${y}-${y+1}`))
+  return Array.from(labels).sort().reverse()
+}
+function computeSeasonRange(label: string): { start: string; end: string } {
+  // Saison N-N+1 : [N-09-01 00:00:00, (N+1)-09-01 00:00:00[
+  const [a,b] = label.split('-').map(x=>parseInt(x,10))
+  const start = new Date(Date.UTC(a, 8, 1, 0,0,0))  // 1 sept a
+  const end   = new Date(Date.UTC(a+1, 8, 1, 0,0,0))// 1 sept a+1
+  return { start: start.toISOString(), end: end.toISOString() }
 }
