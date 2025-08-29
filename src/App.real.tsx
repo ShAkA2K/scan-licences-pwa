@@ -1,7 +1,9 @@
-// src/App.real.tsx
+// src/App.tsx
 import React from 'react'
 import { supabase } from './data/supabase'
 import { getTodaySession, openTodaySession, parisDateStr } from './lib/session'
+import QrScanner from './components/QrScanner'
+import { useWakeLock } from './hooks/useWakeLock'
 
 // -----------------------
 // Types
@@ -12,11 +14,8 @@ type Member = { licence_no: string; first_name: string | null; last_name: string
 type ExportFormat = 'pdf' | 'xlsx' | 'csv'
 
 // -----------------------
-// Utils UI
-// -----------------------
 function cls(...parts: (string | false | undefined | null)[]) { return parts.filter(Boolean).join(' ') }
-
-function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh' | 'external' | 'plus' | 'scan' | 'download'; className?: string }) {
+function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh' | 'external' | 'plus' | 'scan' | 'download' | 'camera'; className?: string }) {
   const path =
     name === 'user' ? "M12 12a5 5 0 100-10 5 5 0 000 10zm-9 9a9 9 0 1118 0H3z" :
     name === 'list' ? "M4 6h16M4 12h16M4 18h7" :
@@ -25,92 +24,60 @@ function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh
     name === 'external' ? "M10 6h8m0 0v8m0-8L9 15" :
     name === 'plus' ? "M12 4v16m8-8H4" :
     name === 'download' ? "M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" :
-    /* scan */       "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 002 2h2M21 17v2a2 2 0 01-2 2h-2"
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={cls("h-5 w-5 stroke-[2] stroke-current", className)}>
-      <path d={path} strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
+    /* scan */ "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 002 2h2M21 17v2a2 2 0 01-2 2h-2"
+  return <svg viewBox="0 0 24 24" fill="none" className={cls("h-5 w-5 stroke-[2] stroke-current", className)}><path d={path} strokeLinecap="round" strokeLinejoin="round" /></svg>
 }
-
 function Avatar({ member }: { member: Member }) {
   const label = `${member.first_name ?? ''} ${member.last_name ?? ''}`.trim() || member.licence_no
   const initial = (member.last_name?.[0] || member.first_name?.[0] || member.licence_no?.[0] || '?').toUpperCase()
-  if (member.photo_url) {
-    return <img src={member.photo_url} alt={label} className="h-10 w-10 rounded-full object-cover ring-1 ring-black/5" />
-  }
-  return (
-    <div className="h-10 w-10 rounded-full bg-blue-600 text-white grid place-items-center font-semibold ring-1 ring-black/5">
-      {initial}
-    </div>
-  )
+  if (member.photo_url) return <img src={member.photo_url} alt={label} className="h-10 w-10 rounded-full object-cover ring-1 ring-black/5" />
+  return <div className="h-10 w-10 rounded-full bg-blue-600 text-white grid place-items-center font-semibold ring-1 ring-black/5">{initial}</div>
 }
 
 // -----------------------
-// Export helper (tolérant)
+// Export helper
 // -----------------------
 async function exportRows(format: ExportFormat, filename: string, rows: Array<{ last_name: string; first_name: string; licence_no: string; created_at: string }>) {
   try {
     const mod: any = await import('./lib/exporters')
-    // Essaye signatures fréquentes
-    if (format === 'pdf') {
-      if (typeof mod.exportRowsToPdf === 'function') return mod.exportRowsToPdf(filename, rows)
-      if (typeof mod.exportEntriesToPdf === 'function') return mod.exportEntriesToPdf(filename, rows)
-      if (typeof mod.exportToPdf === 'function') return mod.exportToPdf(filename, rows)
-    }
-    if (format === 'xlsx') {
-      if (typeof mod.exportRowsToXlsx === 'function') return mod.exportRowsToXlsx(filename, rows)
-      if (typeof mod.exportEntriesToXlsx === 'function') return mod.exportEntriesToXlsx(filename, rows)
-      if (typeof mod.exportToXlsx === 'function') return mod.exportToXlsx(filename, rows)
-    }
-    if (format === 'csv') {
-      if (typeof mod.exportRowsToCsv === 'function') return mod.exportRowsToCsv(filename, rows)
-      if (typeof mod.exportEntriesToCsv === 'function') return mod.exportEntriesToCsv(filename, rows)
-      if (typeof mod.exportToCsv === 'function') return mod.exportToCsv(filename, rows)
-    }
-  } catch {
-    // pas de lib exporters → on tombe sur CSV simple
-  }
-  // Fallback CSV simple
+    if (format === 'pdf')  return (mod.exportRowsToPdf || mod.exportEntriesToPdf || mod.exportToPdf)?.(filename, rows)
+    if (format === 'xlsx') return (mod.exportRowsToXlsx || mod.exportEntriesToXlsx || mod.exportToXlsx)?.(filename, rows)
+    if (format === 'csv')  return (mod.exportRowsToCsv || mod.exportEntriesToCsv || mod.exportToCsv)?.(filename, rows)
+  } catch {}
   const header = 'Nom;Prénom;Licence;Horodatage'
-  const body = rows.map(r => [
-    (r.last_name || '').replace(/;/g, ','),
-    (r.first_name || '').replace(/;/g, ','),
-    r.licence_no,
-    new Date(r.created_at).toLocaleString('fr-FR')
-  ].join(';')).join('\n')
-  const blob = new Blob([header + '\n' + body], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `${filename}.csv`
-  a.click()
-  URL.revokeObjectURL(a.href)
+  const body = rows.map(r => [(r.last_name||'').replace(/;/g, ','),(r.first_name||'').replace(/;/g,','),r.licence_no,new Date(r.created_at).toLocaleString('fr-FR')].join(';')).join('\n')
+  const blob = new Blob([header+'\n'+body], { type:'text/csv;charset=utf-8' })
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download=`${filename}.csv`; a.click(); URL.revokeObjectURL(a.href)
 }
 
 // -----------------------
-// Vues
+// Home (Entrées) + Scan QR
 // -----------------------
-function HomeView() {
+function HomeView({ kiosk }: { kiosk: boolean }) {
   const [loading, setLoading] = React.useState(true)
   const [sess, setSess] = React.useState<SessionRow | null>(null)
   const [err, setErr] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
 
-  // Entrées du jour
   const [entries, setEntries] = React.useState<(EntryRow & { member?: Member | null })[]>([])
   const [loadingEntries, setLoadingEntries] = React.useState(false)
 
-  // Ajout via URL (fallback avant le scan)
   const [url, setUrl] = React.useState('')
   const [addingUrl, setAddingUrl] = React.useState(false)
   const [hint, setHint] = React.useState<string | null>(null)
+
+  const [scannerOn, setScannerOn] = React.useState(kiosk) // en kiosque, scanner actif par défaut
 
   React.useEffect(() => {
     let alive = true
     ;(async () => {
       try {
         setLoading(true)
-        const s = await getTodaySession()
+        let s = await getTodaySession()
+        if (!s && kiosk) {
+          // en kiosque, ouvre automatiquement la session
+          try { s = await openTodaySession() } catch {}
+        }
         if (!alive) return
         setSess(s ?? null)
         setErr(null)
@@ -124,7 +91,7 @@ function HomeView() {
       }
     })()
     return () => { alive = false }
-  }, [])
+  }, [kiosk])
 
   async function loadEntries(sessionId: string, alive = true) {
     try {
@@ -140,8 +107,7 @@ function HomeView() {
       let membersByLic: Record<string, Member> = {}
       if (lis.length) {
         const { data: mem, error: e2 } = await supabase
-          .from('members')
-          .select('licence_no, first_name, last_name, photo_url, source_url')
+          .from('members').select('licence_no, first_name, last_name, photo_url, source_url')
           .in('licence_no', lis)
         if (e2) throw e2
         membersByLic = Object.fromEntries((mem ?? []).map(m => [m.licence_no, m as Member]))
@@ -170,13 +136,12 @@ function HomeView() {
     }
   }
 
-  async function addByUrl(e: React.FormEvent) {
-    e.preventDefault()
+  // appelée par le scanner OU le formulaire URL
+  async function addByUrlInternal(inputUrl: string) {
     if (!sess) return
-    if (!url.trim()) return
     setAddingUrl(true); setHint(null)
     try {
-      const res = await supabase.functions.invoke('itac_profile_store', { body: { url } })
+      const res = await supabase.functions.invoke('itac_profile_store', { body: { url: inputUrl } })
       if (res.error) {
         const status = (res.error as any)?.context?.response?.status
         throw new Error(`Edge function ${status ?? ''}: ${res.error.message}`)
@@ -187,18 +152,16 @@ function HomeView() {
       const ins = await supabase.from('entries').insert({
         session_id: sess.id,
         licence_no: payload.licence_no,
-        source_url: payload.source_url ?? url
+        source_url: payload.source_url ?? inputUrl
       }).select('id, session_id, licence_no, created_at, source_url').single()
 
       if (ins.error) {
-        // doublon journalier (23505) => on affiche juste l’info
         if ((ins.error as any).code === '23505') {
           setHint("Déjà enregistré aujourd’hui pour cette session.")
         } else {
           throw ins.error
         }
       }
-      setUrl('')
       await loadEntries(sess.id)
     } catch (e: any) {
       setErr(e?.message || String(e))
@@ -206,6 +169,27 @@ function HomeView() {
       setAddingUrl(false)
     }
   }
+
+  async function addByUrl(e: React.FormEvent) {
+    e.preventDefault()
+    if (!url.trim()) return
+    await addByUrlInternal(url.trim())
+    setUrl('')
+  }
+
+  // scan handler
+  const onDetect = React.useCallback((text: string) => {
+    try {
+      // on ne traite que les URLs http(s); sinon, ignore
+      if (!/^https?:\/\//i.test(text)) return
+      // on désactive brièvement le scanner pour éviter spam
+      setScannerOn(false)
+      addByUrlInternal(text).finally(() => {
+        // réactive le scanner après 1s
+        setTimeout(() => setScannerOn(true), 1000)
+      })
+    } catch {}
+  }, [sess])
 
   function RowEntry({ row }: { row: EntryRow & { member?: Member | null } }) {
     const m = row.member
@@ -221,11 +205,7 @@ function HomeView() {
           <div className="text-xs text-slate-500">{time} • {sub}</div>
         </div>
         {link && (
-          <button
-            className="rounded-md bg-white px-2 py-1 text-sm ring-1 ring-slate-200 hover:bg-slate-50"
-            onClick={() => window.open(link!, '_blank')}
-            title="Ouvrir la page licence"
-          >
+          <button className="rounded-md bg-white px-2 py-1 text-sm ring-1 ring-slate-200 hover:bg-slate-50" onClick={() => window.open(link!, '_blank')} title="Ouvrir la page licence">
             <Icon name="external" />
           </button>
         )}
@@ -233,7 +213,6 @@ function HomeView() {
     )
   }
 
-  // Rendu
   return (
     <div className="space-y-4">
       {!sess ? (
@@ -243,11 +222,7 @@ function HomeView() {
               <div className="text-sm text-slate-500">Nous sommes le</div>
               <div className="font-semibold">{parisDateStr()} (Europe/Paris)</div>
             </div>
-            <button
-              onClick={handleOpenSession}
-              disabled={busy}
-              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
-            >
+            <button onClick={handleOpenSession} disabled={busy} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60">
               {busy ? '…' : (<><Icon name="plus" /> Ouvrir la session du jour</>)}
             </button>
           </div>
@@ -255,8 +230,9 @@ function HomeView() {
         </div>
       ) : (
         <>
+          {/* Bloc Scan */}
           <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+            <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-sm text-slate-500">Session du jour</div>
                 <div className="font-semibold">{sess.date} — <span className="text-slate-500">id:</span> {sess.id}</div>
@@ -265,32 +241,33 @@ function HomeView() {
                 <button onClick={() => loadEntries(sess.id)} className="rounded-lg bg-white px-3 py-1.5 hover:bg-gray-100 ring-1 ring-gray-200 text-sm">
                   <span className="inline-flex items-center gap-2"><Icon name="refresh" /> Rafraîchir</span>
                 </button>
+                <button onClick={() => setScannerOn(s => !s)} className={cls("rounded-lg px-3 py-1.5 text-sm ring-1", scannerOn ? "bg-blue-600 text-white ring-blue-600" : "bg-white ring-gray-200 hover:bg-gray-100")}>
+                  <span className="inline-flex items-center gap-2"><Icon name="camera" /> {scannerOn ? 'Scanner ON' : 'Scanner OFF'}</span>
+                </button>
               </div>
             </div>
 
-            {/* Ajout par URL */}
-            <form onSubmit={addByUrl} className="mt-3 grid gap-2 md:flex">
-              <input
-                type="url"
-                required
-                placeholder="Coller l’URL du QR (ex: https://itac.pro/F.aspx?... )"
-                value={url}
-                onChange={(e)=>setUrl(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
-              />
-              <button
-                type="submit"
-                disabled={addingUrl}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
-                title="Ajouter une entrée via l’URL"
-              >
-                {addingUrl ? '…' : (<><Icon name="plus" /> Ajouter</>)}
-              </button>
-            </form>
+            {scannerOn && (
+              <div className="mt-3">
+                <QrScanner onDetect={onDetect} paused={!scannerOn} className="overflow-hidden rounded-xl ring-1 ring-black/5" />
+                <div className="mt-2 text-xs text-slate-500">Aligne le QR dans le cadre. En kiosque, le scan reprend automatiquement après chaque enregistrement.</div>
+              </div>
+            )}
+
+            {/* Ajout par URL (fallback) */}
+            {!kiosk && (
+              <form onSubmit={addByUrl} className="mt-3 grid gap-2 md:flex">
+                <input type="url" required placeholder="Coller l’URL du QR (ex: https://itac.pro/F.aspx?... )" value={url} onChange={(e)=>setUrl(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <button type="submit" disabled={addingUrl} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60" title="Ajouter une entrée via l’URL">
+                  {addingUrl ? '…' : (<><Icon name="plus" /> Ajouter</>)}
+                </button>
+              </form>
+            )}
             {hint && <div className="mt-2 text-sm text-amber-800 bg-amber-50 p-2 rounded">{hint}</div>}
             {err && <div className="mt-2 text-sm text-red-800 bg-red-50 p-2 rounded">Erreur: {err}</div>}
           </div>
 
+          {/* Liste du jour */}
           <div className="rounded-2xl bg-white p-2 shadow ring-1 ring-black/5">
             <div className="px-2 py-2 font-semibold">Entrées du {sess.date}</div>
             {loadingEntries ? (
@@ -309,6 +286,9 @@ function HomeView() {
   )
 }
 
+// -----------------------
+// Membres
+// -----------------------
 function MembersView() {
   const [q, setQ] = React.useState('')
   const [rows, setRows] = React.useState<Member[]>([])
@@ -323,8 +303,7 @@ function MembersView() {
         const { data, error } = await supabase
           .from('members')
           .select('licence_no, first_name, last_name, photo_url, source_url')
-          .order('last_name', { ascending: true, nullsFirst: false })
-          .order('first_name', { ascending: true, nullsFirst: false })
+          .order('last_name', { ascending: true }).order('first_name', { ascending: true })
         if (error) throw error
         if (!alive) return
         setRows((data ?? []) as Member[])
@@ -353,14 +332,8 @@ function MembersView() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <input
-          value={q}
-          onChange={e=>setQ(e.target.value)}
-          placeholder="Rechercher nom, prénom ou N° licence…"
-          className="w-full rounded-lg border border-slate-300 px-3 py-2"
-        />
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Rechercher nom, prénom ou N° licence…" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
       </div>
-
       <div className="rounded-2xl bg-white p-2 shadow ring-1 ring-black/5">
         {loading ? (
           <div className="px-2 py-6 text-slate-500">Chargement…</div>
@@ -376,11 +349,7 @@ function MembersView() {
                   <div className="text-xs text-slate-500">{m.licence_no}</div>
                 </div>
                 {m.source_url && (
-                  <button
-                    className="rounded-md bg-white px-2 py-1 text-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                    onClick={() => window.open(m.source_url!, '_blank')}
-                    title="Ouvrir la page licence"
-                  >
+                  <button className="rounded-md bg-white px-2 py-1 text-sm ring-1 ring-slate-200 hover:bg-slate-50" onClick={() => window.open(m.source_url!, '_blank')} title="Ouvrir la page licence">
                     <Icon name="external" />
                   </button>
                 )}
@@ -394,15 +363,15 @@ function MembersView() {
   )
 }
 
+// -----------------------
+// Sessions + exports
+// -----------------------
 function SessionsView() {
   const [sessions, setSessions] = React.useState<SessionRow[]>([])
   const [loading, setLoading] = React.useState(true)
   const [err, setErr] = React.useState<string | null>(null)
-
-  // format global pour les exports de session
   const [fmt, setFmt] = React.useState<ExportFormat>('pdf')
 
-  // Export saison
   const [season, setSeason] = React.useState<string>(computeDefaultSeasonLabel())
   const [seasonFmt, setSeasonFmt] = React.useState<ExportFormat>('xlsx')
   const [busySeason, setBusySeason] = React.useState(false)
@@ -412,10 +381,7 @@ function SessionsView() {
     ;(async () => {
       try {
         setLoading(true)
-        const { data, error } = await supabase
-          .from('sessions')
-          .select('id, date')
-          .order('date', { ascending: false })
+        const { data, error } = await supabase.from('sessions').select('id, date').order('date', { ascending: false })
         if (error) throw error
         if (!alive) return
         setSessions((data ?? []) as SessionRow[])
@@ -433,25 +399,15 @@ function SessionsView() {
 
   async function exportOne(session: SessionRow) {
     try {
-      // entries de la session
-      const { data: ent, error: e1 } = await supabase
-        .from('entries')
-        .select('licence_no, created_at')
-        .eq('session_id', session.id)
-        .order('created_at', { ascending: true })
+      const { data: ent, error: e1 } = await supabase.from('entries').select('licence_no, created_at').eq('session_id', session.id).order('created_at', { ascending: true })
       if (e1) throw e1
       const licences = Array.from(new Set((ent ?? []).map(x => x.licence_no))).filter(Boolean)
-
       let membersByLic: Record<string, Member> = {}
       if (licences.length) {
-        const { data: mem, error: e2 } = await supabase
-          .from('members')
-          .select('licence_no, first_name, last_name')
-          .in('licence_no', licences)
+        const { data: mem, error: e2 } = await supabase.from('members').select('licence_no, first_name, last_name').in('licence_no', licences)
         if (e2) throw e2
         membersByLic = Object.fromEntries((mem ?? []).map(m => [m.licence_no, m as Member]))
       }
-
       const rows = (ent ?? []).map(e => ({
         last_name: membersByLic[e.licence_no]?.last_name ?? '',
         first_name: membersByLic[e.licence_no]?.first_name ?? '',
@@ -468,21 +424,12 @@ function SessionsView() {
     try {
       setBusySeason(true)
       const { start, end } = computeSeasonRange(season)
-      // entries entre start/end
-      const { data: ent, error: e1 } = await supabase
-        .from('entries')
-        .select('licence_no, created_at')
-        .gte('created_at', start)
-        .lt('created_at', end)
-        .order('created_at', { ascending: true })
+      const { data: ent, error: e1 } = await supabase.from('entries').select('licence_no, created_at').gte('created_at', start).lt('created_at', end).order('created_at', { ascending: true })
       if (e1) throw e1
       const licences = Array.from(new Set((ent ?? []).map(x => x.licence_no))).filter(Boolean)
       let membersByLic: Record<string, Member> = {}
       if (licences.length) {
-        const { data: mem, error: e2 } = await supabase
-          .from('members')
-          .select('licence_no, first_name, last_name')
-          .in('licence_no', licences)
+        const { data: mem, error: e2 } = await supabase.from('members').select('licence_no, first_name, last_name').in('licence_no', licences)
         if (e2) throw e2
         membersByLic = Object.fromEntries((mem ?? []).map(m => [m.licence_no, m as Member]))
       }
@@ -502,7 +449,6 @@ function SessionsView() {
 
   return (
     <div className="space-y-4">
-      {/* Bloc Export Saison */}
       <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
         <div className="grid gap-3 md:grid-cols-3">
           <div>
@@ -520,11 +466,7 @@ function SessionsView() {
             </select>
           </div>
           <div className="flex items-end">
-            <button
-              onClick={exportSeason}
-              disabled={busySeason}
-              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60 w-full md:w-auto"
-            >
+            <button onClick={exportSeason} disabled={busySeason} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60 w-full md:w-auto">
               {busySeason ? '…' : (<><Icon name="download" /> Exporter la saison</>)}
             </button>
           </div>
@@ -532,66 +474,106 @@ function SessionsView() {
         <p className="mt-2 text-xs text-slate-500">Colonnes : Nom, Prénom, Licence, Date & heure d’enregistrement.</p>
       </div>
 
-      {/* Liste des sessions avec export par ligne */}
       <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
         <div className="flex items-center justify-between gap-2">
           <h3 className="font-semibold">Toutes les sessions</h3>
           <div className="flex items-center gap-2">
             <label className="text-sm text-slate-600">Format</label>
-            <select value={fmt} onChange={e=>setFmt(e.target.value as ExportFormat)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm">
-              <option value="pdf">PDF</option>
-              <option value="xlsx">XLSX</option>
-              <option value="csv">CSV</option>
+            <select onChange={e=>{/* handled per-row when exporting */}} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" disabled>
+              <option>Choix dans l’export</option>
             </select>
           </div>
         </div>
 
-        {loading ? (
-          <div className="py-6 text-slate-500">Chargement…</div>
-        ) : sessions.length === 0 ? (
-          <div className="py-6 text-slate-500">Aucune session.</div>
-        ) : (
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-slate-600">
-                  <th className="px-2 py-2">Date</th>
-                  <th className="px-2 py-2">ID</th>
-                  <th className="px-2 py-2 text-right">Export</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {sessions.map(s => (
-                  <tr key={s.id} className="hover:bg-slate-50">
-                    <td className="px-2 py-2 whitespace-nowrap">{s.date}</td>
-                    <td className="px-2 py-2">{s.id}</td>
-                    <td className="px-2 py-2 text-right">
-                      <button
-                        onClick={() => exportOne(s)}
-                        className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 ring-1 ring-slate-200 hover:bg-gray-50"
-                        title="Exporter cette session"
-                      >
-                        <Icon name="download" /> Exporter
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
+        <SessionsTable onExport={exportOne} />
         {err && <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">Erreur: {err}</div>}
       </div>
     </div>
   )
 }
 
+function SessionsTable({ onExport }: { onExport: (s: { id: string; date: string }) => void }) {
+  const [sessions, setSessions] = React.useState<SessionRow[]>([])
+  const [loading, setLoading] = React.useState(true)
+
+  React.useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        setLoading(true)
+        const { data } = await supabase.from('sessions').select('id, date').order('date', { ascending: false })
+        if (!alive) return
+        setSessions((data ?? []) as SessionRow[])
+      } finally { if (alive) setLoading(false) }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  if (loading) return <div className="py-6 text-slate-500">Chargement…</div>
+  if (!sessions.length) return <div className="py-6 text-slate-500">Aucune session.</div>
+
+  return (
+    <div className="mt-2 overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-slate-600">
+            <th className="px-2 py-2">Date</th>
+            <th className="px-2 py-2">ID</th>
+            <th className="px-2 py-2 text-right">Export</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {sessions.map(s => (
+            <tr key={s.id} className="hover:bg-slate-50">
+              <td className="px-2 py-2 whitespace-nowrap">{s.date}</td>
+              <td className="px-2 py-2">{s.id}</td>
+              <td className="px-2 py-2 text-right">
+                <button onClick={() => onExport(s)} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 ring-1 ring-slate-200 hover:bg-gray-50" title="Exporter cette session">
+                  <Icon name="download" /> Exporter
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // -----------------------
-// App globale + Nav
+// App + Kiosk mode
 // -----------------------
-export default function AppReal() {
-  const [view, setView] = React.useState<'home'|'members'|'sessions'>('home')
+export default function App() {
+  const params = new URLSearchParams(location.search)
+  const kiosk = params.get('kiosk') === '1'
+  const [view, setView] = React.useState<'home'|'members'|'sessions'>(kiosk ? 'home' : 'home')
+
+  // Wake lock + plein écran en kiosque
+  useWakeLock(kiosk)
+  React.useEffect(() => {
+    if (!kiosk) return
+    const goFS = async () => {
+      try { if (!document.fullscreenElement) await document.documentElement.requestFullscreen() } catch {}
+      // @ts-ignore
+      try { await (screen as any)?.orientation?.lock?.('portrait-primary') } catch {}
+    }
+    goFS()
+  }, [kiosk])
+
+  // “sortie” kiosque: appui long sur le logo (2s)
+  const pressTimer = React.useRef<number | null>(null)
+  const [exitHint, setExitHint] = React.useState(false)
+  function startPress() {
+    if (!kiosk) return
+    pressTimer.current = window.setTimeout(() => setExitHint(true), 1800)
+  }
+  function endPress() {
+    if (!kiosk) return
+    if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null }
+  }
+  function exitKiosk() {
+    const u = new URL(location.href); u.searchParams.delete('kiosk'); location.href = u.toString()
+  }
 
   async function logout() {
     await supabase.auth.signOut()
@@ -600,69 +582,64 @@ export default function AppReal() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50 to-blue-100">
-      <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-slate-200">
+      <header className={cls("sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-slate-200", kiosk && "py-1")}>
         <div className="mx-auto max-w-5xl p-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 select-none" onMouseDown={startPress} onMouseUp={endPress} onTouchStart={startPress} onTouchEnd={endPress}>
             <div className="h-8 w-8 rounded-xl bg-blue-600 text-white grid place-items-center font-bold">T</div>
             <div>
               <div className="text-sm text-slate-500">Club</div>
               <div className="font-semibold">Enregistrement par QR</div>
             </div>
           </div>
-          <nav className="flex items-center gap-2">
-            <button
-              onClick={() => setView('home')}
-              className={cls(
-                "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm",
-                view === 'home' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200"
-              )}
-              title="Entrées du jour"
-            >
-              <Icon name="list" /> Entrées
-            </button>
-            <button
-              onClick={() => setView('members')}
-              className={cls(
-                "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm",
-                view === 'members' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200"
-              )}
-              title="Membres"
-            >
-              <Icon name="user" /> Membres
-            </button>
-            <button
-              onClick={() => setView('sessions')}
-              className={cls(
-                "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm",
-                view === 'sessions' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200"
-              )}
-              title="Sessions & exports"
-            >
-              <Icon name="download" /> Sessions
-            </button>
-            <button
-              onClick={logout}
-              className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 ring-1 ring-gray-200 hover:bg-gray-100 text-sm"
-              title="Se déconnecter"
-            >
-              <Icon name="logout" /> Se déconnecter
-            </button>
-          </nav>
+          {!kiosk && (
+            <nav className="flex items-center gap-2">
+              <button onClick={() => setView('home')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'home' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Entrées du jour">
+                <Icon name="list" /> Entrées
+              </button>
+              <button onClick={() => setView('members')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'members' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Membres">
+                <Icon name="user" /> Membres
+              </button>
+              <button onClick={() => setView('sessions')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'sessions' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Sessions & exports">
+                <Icon name="download" /> Sessions
+              </button>
+              <button onClick={logout} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 ring-1 ring-gray-200 hover:bg-gray-100 text-sm" title="Se déconnecter">
+                <Icon name="logout" /> Se déconnecter
+              </button>
+            </nav>
+          )}
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl p-4">
-        {view === 'home' ? <HomeView /> : view === 'members' ? <MembersView /> : <SessionsView />}
+      {kiosk && exitHint && (
+        <div className="fixed inset-0 z-20 bg-black/50 grid place-items-center p-4">
+          <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/10 max-w-sm w-full space-y-3">
+            <div className="font-semibold">Mode kiosque</div>
+            <p className="text-sm text-slate-600">Pour sortir du mode kiosque, appuie sur “Quitter le kiosque”.</p>
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={()=>setExitHint(false)} className="rounded-lg bg-white px-3 py-1.5 ring-1 ring-slate-200 hover:bg-gray-50">Rester</button>
+              <button onClick={exitKiosk} className="rounded-lg bg-blue-600 text-white px-3 py-1.5 hover:bg-blue-700">Quitter le kiosque</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className={cls("mx-auto max-w-5xl p-4", kiosk && "max-w-3xl")}>
+        {/* En kiosque, on n’affiche que “Entrées” */}
+        <HomeView kiosk={kiosk} />
+        {!kiosk && (
+          <>
+            {/* les autres vues sont accessibles via la nav */}
+          </>
+        )}
       </main>
     </div>
   )
 }
 
 // -----------------------
-// Saisons (utilitaires)
+// Saisons utils
 // -----------------------
 function computeDefaultSeasonLabel(): string {
-  // Saison sportive FR: 1er septembre -> 31 août (N -> N+1)
   const now = new Date()
   const y = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1
   return `${y}-${y+1}`
@@ -670,15 +647,14 @@ function computeDefaultSeasonLabel(): string {
 function buildSeasonOptions(): string[] {
   const current = parseInt(computeDefaultSeasonLabel().slice(0,4), 10)
   const years: number[] = []
-  for (let y=current+1; y>=current-2; y--) years.push(y-1) // propose quelques saisons autour
+  for (let y=current+1; y>=current-2; y--) years.push(y-1)
   const labels = new Set<string>()
   years.forEach(y => labels.add(`${y}-${y+1}`))
   return Array.from(labels).sort().reverse()
 }
 function computeSeasonRange(label: string): { start: string; end: string } {
-  // Saison N-N+1 : [N-09-01 00:00:00, (N+1)-09-01 00:00:00[
-  const [a,b] = label.split('-').map(x=>parseInt(x,10))
-  const start = new Date(Date.UTC(a, 8, 1, 0,0,0))  // 1 sept a
-  const end   = new Date(Date.UTC(a+1, 8, 1, 0,0,0))// 1 sept a+1
+  const [a] = label.split('-').map(x=>parseInt(x,10))
+  const start = new Date(Date.UTC(a, 8, 1, 0,0,0))
+  const end   = new Date(Date.UTC(a+1, 8, 1, 0,0,0))
   return { start: start.toISOString(), end: end.toISOString() }
 }

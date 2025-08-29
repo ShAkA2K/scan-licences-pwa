@@ -1,24 +1,35 @@
-import { useEffect, useRef, useState } from 'react'
+// src/hooks/useWakeLock.ts
+import { useEffect, useRef } from 'react'
 
-export function useWakeLock(active: boolean) {
-  const [supported, setSupported] = useState(false)
-  const lockRef = useRef<any>(null)
-
-  useEffect(() => { setSupported('wakeLock' in navigator) }, [])
+export function useWakeLock(enabled: boolean) {
+  const ref = useRef<any>(null)
   useEffect(() => {
-    let mounted = true
-    async function request() {
+    let cancelled = false
+    async function lock() {
       try {
-        // @ts-ignore
-        const lk = await (navigator as any).wakeLock.request('screen')
-        if (!mounted) { try { lk.release() } catch {} ; return }
-        lockRef.current = lk
-        lk.addEventListener?.('release', () => { lockRef.current = null })
-      } catch {}
+        // @ts-ignore - types pas toujours présents
+        const wl = await (navigator as any)?.wakeLock?.request?.('screen')
+        if (!wl) return
+        ref.current = wl
+        wl.addEventListener?.('release', () => {
+          if (!cancelled && enabled) {
+            lock().catch(() => {})
+          }
+        })
+      } catch {
+        // pas supporté / refusé
+      }
     }
-    if (active && supported) request()
-    return () => { mounted = false; try { lockRef.current?.release?.() } catch {} }
-  }, [active, supported])
-
-  return supported
+    if (enabled && document.visibilityState === 'visible') lock()
+    const onVis = () => {
+      if (enabled && document.visibilityState === 'visible') lock().catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVis)
+      try { ref.current?.release?.() } catch {}
+      ref.current = null
+    }
+  }, [enabled])
 }
