@@ -10,15 +10,13 @@ type Props = {
 
 async function loadHtml5QrCode(): Promise<any> {
   try {
-    // import normal (bundle)
     return await import('html5-qrcode')
   } catch {
-    // Fallback CDN (utile sur certains mobiles / vieilles WebViews)
+    // Fallback CDN (utile sur certains mobiles)
     const src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/minified/html5-qrcode.min.js'
     await new Promise<void>((resolve, reject) => {
       const s = document.createElement('script')
-      s.src = src
-      s.async = true
+      s.src = src; s.async = true
       s.onload = () => resolve()
       s.onerror = () => reject(new Error('CDN load failed'))
       document.head.appendChild(s)
@@ -38,6 +36,7 @@ export default function QrScanner({ onDetect, paused = false, className, fps = 1
   const boxId = React.useRef('qr-' + Math.random().toString(36).slice(2))
   const instRef = React.useRef<any>(null)
   const lastRef = React.useRef<{ text: string; t: number } | null>(null)
+  const trackRef = React.useRef<MediaStreamTrack | null>(null)
 
   const [err, setErr] = React.useState<string | null>(null)
   const [starting, setStarting] = React.useState(false)
@@ -45,7 +44,10 @@ export default function QrScanner({ onDetect, paused = false, className, fps = 1
   const [cameras, setCameras] = React.useState<{ id: string; label?: string }[]>([])
   const [camId, setCamId] = React.useState<string | null>(null)
 
-  // Pré-checks basiques
+  const [torchSupported, setTorchSupported] = React.useState(false)
+  const [torchOn, setTorchOn] = React.useState(false)
+
+  // Pré-checks
   React.useEffect(() => {
     if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
       setErr('Scanner indisponible (HTTPS requis).')
@@ -68,12 +70,12 @@ export default function QrScanner({ onDetect, paused = false, className, fps = 1
       const mod: any = await loadHtml5QrCode()
       const { Html5Qrcode, Html5QrcodeSupportedFormats } = mod
 
-      // Liste des caméras (geste utilisateur requis sur iOS/Chrome)
+      // Récup liste caméras (geste utilisateur requis)
       const list = await Html5Qrcode.getCameras()
       const cams = (list ?? []).map((c: any) => ({ id: c.id, label: c.label }))
       setCameras(cams)
 
-      // Choisir la dorsale si dispo
+      // Choisir la dorsale si possible
       const byLabel = cams.find(c => (c.label || '').toLowerCase().includes('back')) || cams[0]
       const chosenId = camId || byLabel?.id || cams[0]?.id || null
       if (!chosenId) throw new Error('Aucune caméra disponible')
@@ -103,6 +105,17 @@ export default function QrScanner({ onDetect, paused = false, className, fps = 1
 
       setCamId(chosenId)
       setRunning(true)
+
+      // Récupérer la piste vidéo pour la torche
+      const box = document.getElementById(boxId.current)!
+      const video = box.querySelector('video') as HTMLVideoElement | null
+      const track = (video?.srcObject as MediaStream | null)?.getVideoTracks?.()[0] || null
+      trackRef.current = track || null
+
+      const caps: any = track?.getCapabilities?.()
+      const torchOk = !!(caps && 'torch' in caps && caps.torch)
+      setTorchSupported(torchOk)
+      setTorchOn(false)
     } catch (e: any) {
       console.error('QR start fail', e)
       if (e?.name === 'NotAllowedError') setErr('Permission caméra refusée. Autorise la caméra dans les paramètres du site.')
@@ -116,6 +129,9 @@ export default function QrScanner({ onDetect, paused = false, className, fps = 1
   }
 
   async function stop() {
+    try {
+      await setTorch(false)
+    } catch {}
     const inst = instRef.current
     if (!inst) return
     try {
@@ -123,7 +139,25 @@ export default function QrScanner({ onDetect, paused = false, className, fps = 1
       await inst.clear()
     } catch {}
     instRef.current = null
+    trackRef.current = null
     setRunning(false)
+    setTorchSupported(false)
+    setTorchOn(false)
+  }
+
+  async function setTorch(on: boolean) {
+    const t = trackRef.current
+    if (!t) return
+    // @ts-ignore
+    if (t.applyConstraints) {
+      try {
+        // @ts-ignore
+        await t.applyConstraints({ advanced: [{ torch: on }] })
+        setTorchOn(on)
+      } catch {
+        // ignore
+      }
+    }
   }
 
   React.useEffect(() => {
@@ -142,6 +176,12 @@ export default function QrScanner({ onDetect, paused = false, className, fps = 1
         ) : (
           <>
             <button onClick={stop} className="rounded-lg bg-white px-3 py-1.5 ring-1 ring-slate-200 hover:bg-slate-50">Arrêter</button>
+            {torchSupported && (
+              <button onClick={() => setTorch(!torchOn)}
+                      className={["rounded-lg px-3 py-1.5 ring-1", torchOn ? "bg-amber-500 text-white ring-amber-500" : "bg-white ring-slate-200 hover:bg-slate-50"].join(' ')}>
+                🔦 Torche {torchOn ? 'ON' : 'OFF'}
+              </button>
+            )}
             {cameras.length > 1 && (
               <select value={camId ?? ''} onChange={e => { setCamId(e.target.value); stop().then(() => start()) }}
                       className="rounded-lg border border-slate-300 px-2 py-1.5">
