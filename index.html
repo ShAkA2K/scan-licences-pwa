@@ -1,92 +1,12 @@
 <!doctype html>
-<html lang="fr">
+<html>
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-    <meta name="theme-color" content="#0ea5e9" />
-    <title>Scan licences</title>
-    <style>
-      /* Mini UI d’amorçage pour éviter l’écran blanc */
-      :root { color-scheme: light; }
-      html,body { height:100%; margin:0; }
-      #boot {
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
-        display:none; min-height:100%; background:linear-gradient(#eff6ff,#dbeafe);
-        color:#0f172a; padding:16px;
-      }
-      #boot.visible { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; text-align:center; }
-      #boot .card { background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px; max-width:520px; width:100%; box-shadow:0 6px 24px rgba(2,6,23,.08); }
-      #boot h1 { margin:0; font-size:18px; }
-      #boot pre { text-align:left; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:10px; font-size:12px; max-height:200px; overflow:auto; }
-      #boot .row { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
-      #boot button { border-radius:10px; border:1px solid #cbd5e1; background:#fff; padding:8px 12px; font-weight:600; }
-      #boot button.primary { background:#2563eb; color:#fff; border-color:#2563eb; }
-    </style>
-    <script>
-      // ---- Amorçage très tôt : purge SW/caches si demandé, journaux visibles, jamais d'écran blanc
-      (function() {
-        const q = new URLSearchParams(location.search);
-        const wantBoot = q.has('boot') || q.has('clear-sw') || q.has('fix') || q.has('noscan');
-        const bootEl = document.getElementById('boot');
-        function showBoot() { bootEl && (bootEl.className = 'visible'); }
-        function log(msg) {
-          console.log('[boot]', msg);
-          const out = document.getElementById('bootlog');
-          if (out) { out.textContent += msg + '\n'; out.scrollTop = out.scrollHeight; }
-        }
-        async function purge() {
-          try {
-            if ('serviceWorker' in navigator) {
-              const regs = await navigator.serviceWorker.getRegistrations();
-              for (const r of regs) { await r.unregister(); }
-              log('SW désinstallé');
-            }
-          } catch(e){ log('SW erreur: '+(e.message||e)); }
-          try {
-            if (window.caches?.keys) { const ks = await caches.keys(); for (const k of ks) { await caches.delete(k); } log('Caches vidés'); }
-          } catch(e){ log('Caches erreur: '+(e.message||e)); }
-        }
-        async function init() {
-          if (wantBoot) {
-            showBoot();
-            log('Démarrage de secours…');
-            if (q.has('clear-sw') || q.has('fix')) {
-              await purge();
-              log('Purge effectuée. Rechargement…');
-              const url = new URL(location.href);
-              url.searchParams.delete('clear-sw'); url.searchParams.delete('fix');
-              // garde boot=1 pour voir les logs après refresh
-              if (!url.searchParams.has('boot')) url.searchParams.set('boot','1');
-              return location.replace(url.toString());
-            }
-            log('Mode diagnostic (boot=1). L’application va charger ensuite.');
-          }
-          // continue — laisser Vite/React démarrer ensuite
-        }
-        window.addEventListener('error', e => { showBoot(); log('Erreur: '+e.message); });
-        window.addEventListener('unhandledrejection', e => { showBoot(); log('Rejet: '+(e.reason?.message||e.reason)); });
-        init();
-        // expose la purge sur bouton
-        window.__purge_sw = async function() { showBoot(); log('Purge manuelle demandée…'); await purge(); log('Rechargement…'); setTimeout(()=>location.reload(), 300); };
-      })();
-    </script>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Scan Licences</title>
   </head>
   <body>
-    <div id="boot">
-      <div class="card">
-        <h1>App – Démarrage</h1>
-        <p>Cette page évite l’écran blanc. Si besoin, purge le Service Worker et les caches.</p>
-        <div class="row">
-          <button class="primary" onclick="__purge_sw()">Purger SW & caches</button>
-          <button onclick="location.search='?boot=1'">Voir les logs</button>
-          <button onclick="location.search='?noscan=1'">Désactiver le scanner</button>
-        </div>
-        <pre id="bootlog"></pre>
-      </div>
-    </div>
-
-    <div id="root"></div>
-    <!-- le bundle sera injecté par Vite (build) ; en dev, main.tsx est chargé -->
+    <div id="root"><noscript>Activez JavaScript</noscript></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
