@@ -25,41 +25,65 @@ function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh
     name === 'plus' ? "M12 4v16m8-8H4" :
     name === 'download' ? "M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" :
     name === 'cloud-off' ? "M3 15a4 4 0 004-4h1a7 7 0 1113 3M3 15a4 4 0 004 4h9" :
-    /* camera */ "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 002 2h2M21 17v2a2 2 0 01-2 2h-2"
+    /* camera */ "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 01-2 2h-2"
   return <svg viewBox="0 0 24 24" fill="none" className={cls("h-5 w-5 stroke-[2] stroke-current", className)}><path d={path} strokeLinecap="round" strokeLinejoin="round" /></svg>
 }
 
-// ------- Avatar robuste (multi-candidats) -------
-function resolveBase(): string {
-  const base = (import.meta as any).env?.VITE_SUPABASE_URL || ''
-  return String(base).replace(/\/$/, '')
+// ------- Avatar robuste (via Supabase Storage, sans VITE_SUPABASE_URL) -------
+function normLic(s?: string | null) {
+  return (s ?? '').toString().trim().toUpperCase()
 }
+
+// Transforme un chemin “quelconque” (absolu, ou bucket/path, ou /storage/v1/object/public/...) en URL publique.
+// - Si déjà absolu (http/https), on renvoie tel quel
+// - Sinon on tente de déduire {bucket, path} et on génère l’URL avec storage.getPublicUrl
+function toPublicUrlMaybe(pathish: string): string | null {
+  if (!pathish) return null
+  const raw = pathish.trim()
+
+  // Cas déjà absolu
+  if (/^https?:\/\//i.test(raw)) return raw
+
+  let s = raw.replace(/^\/+/, '')
+  // Ex: storage/v1/object/public/photos/members/82936384.jpg  -> photos/members/82936384.jpg
+  s = s.replace(/^storage\/v1\/object\/public\//i, '')
+  s = s.replace(/^public\//i, '') // au cas où
+
+  const parts = s.split('/')
+  if (parts.length < 2) return null
+
+  const bucket = parts.shift()! // ex: 'photos'
+  const objectPath = parts.join('/') // ex: 'members/82936384.jpg'
+
+  try {
+    const { data } = supabase.storage.from(bucket).getPublicUrl(objectPath)
+    return data.publicUrl || null
+  } catch {
+    return null
+  }
+}
+
+// Construit la liste des candidats d’URL publiques à tester (dans l’ordre)
 function buildPhotoCandidates(member: Member): string[] {
-  const base = resolveBase()
-  const lic = (member.licence_no || '').toUpperCase()
-  const raw = (member.photo_url || '').trim()
+  const lic = normLic(member.licence_no)
   const cands: string[] = []
 
-  // 1) URL absolue telle quelle
-  if (raw && /^https?:\/\//i.test(raw)) cands.push(raw)
-
-  // 2) Si chemin relatif → reconstruire l’URL publique
-  if (raw && !/^https?:\/\//i.test(raw)) {
-    const cleaned = raw
-      .replace(/^\/+/, '')
-      .replace(/^storage\/v1\/object\/public\//, '')
-      .replace(/^public\//, '') // si quelqu’un a stocké "public/photos/.."
-    if (base) cands.push(`${base}/storage/v1/object/public/${cleaned}`)
+  // 1) URL fournie dans la DB (absolue ou non)
+  if (member.photo_url) {
+    const u = toPublicUrlMaybe(member.photo_url)
+    if (u) cands.push(u)
   }
 
-  // 3) Fallback par licence_no dans le bucket standard
-  if (lic && base) {
-    ;['jpg','jpeg','png','webp'].forEach(ext => {
-      cands.push(`${base}/storage/v1/object/public/photos/members/${lic}.${ext}`)
+  // 2) Fallbacks par licence dans le bucket “photos”
+  if (lic) {
+    ;['jpg', 'jpeg', 'png', 'webp'].forEach(ext => {
+      const path = `photos/members/${lic}.${ext}` // bucket=photos, objet=members/LIC.ext
+      const u = toPublicUrlMaybe(path)
+      if (u) cands.push(u)
     })
   }
 
-  // Dédup
+  // Supprime les doublons
   return Array.from(new Set(cands))
 }
 
@@ -84,7 +108,11 @@ function Avatar({ member }: { member: Member }) {
       />
     )
   }
-  return <div className="h-10 w-10 rounded-full bg-blue-600 text-white grid place-items-center font-semibold ring-1 ring-black/5">{initial}</div>
+  return (
+    <div className="h-10 w-10 rounded-full bg-blue-600 text-white grid place-items-center font-semibold ring-1 ring-black/5">
+      {initial}
+    </div>
+  )
 }
 
 // ------- Export helpers -------
