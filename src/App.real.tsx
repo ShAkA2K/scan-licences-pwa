@@ -5,6 +5,7 @@ import { getTodaySession, openTodaySession, parisDateStr } from './lib/session'
 import QrScanner from './components/QrScanner'
 import { useWakeLock } from './hooks/useWakeLock'
 import { useBeep } from './hooks/useBeep'
+import { addToOutbox, outboxCount, onOutboxChange, startOutboxAutoFlush, flushOutbox } from './data/outbox'
 
 // ------- Types -------
 type SessionRow = { id: string; date: string }
@@ -14,7 +15,7 @@ type ExportFormat = 'pdf' | 'xlsx' | 'csv'
 
 // ------- Utils UI -------
 function cls(...parts: (string | false | undefined | null)[]) { return parts.filter(Boolean).join(' ') }
-function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh' | 'external' | 'plus' | 'download' | 'camera'; className?: string }) {
+function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh' | 'external' | 'plus' | 'download' | 'camera' | 'cloud-off'; className?: string }) {
   const path =
     name === 'user' ? "M12 12a5 5 0 100-10 5 5 0 000 10zm-9 9a9 9 0 1118 0H3z" :
     name === 'list' ? "M4 6h16M4 12h16M4 18h7" :
@@ -23,6 +24,7 @@ function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh
     name === 'external' ? "M10 6h8m0 0v8m0-8L9 15" :
     name === 'plus' ? "M12 4v16m8-8H4" :
     name === 'download' ? "M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" :
+    name === 'cloud-off' ? "M3 15a4 4 0 014-4h1a7 7 0 1113 3M3 15a4 4 0 004 4h9" :
     /* camera */ "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 002 2h2M21 17v2a2 2 0 01-2 2h-2"
   return <svg viewBox="0 0 24 24" fill="none" className={cls("h-5 w-5 stroke-[2] stroke-current", className)}><path d={path} strokeLinecap="round" strokeLinejoin="round" /></svg>
 }
@@ -36,7 +38,6 @@ function resolvePhotoUrl(photoUrl?: string | null): string | null {
   const path = String(photoUrl).replace(/^\/+/, '')
   return `${root}/storage/v1/object/public/${path}`
 }
-
 function Avatar({ member }: { member: Member }) {
   const [broken, setBroken] = React.useState(false)
   const label = `${member.first_name ?? ''} ${member.last_name ?? ''}`.trim() || member.licence_no
@@ -77,7 +78,21 @@ function HomeView({ kiosk, noScan }: { kiosk: boolean; noScan: boolean }) {
 
   const [scannerOn, setScannerOn] = React.useState(kiosk && !noScan)
 
+  const [isOnline, setIsOnline] = React.useState(navigator.onLine)
+  const [pending, setPending] = React.useState(outboxCount())
+
   const { beepOk, beepWarn, beepError } = useBeep()
+
+  // Écouteurs réseau + outbox
+  React.useEffect(() => {
+    const onOnline = () => setIsOnline(true)
+    const onOffline = () => setIsOnline(false)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    const un = onOutboxChange(() => setPending(outboxCount()))
+    const stop = startOutboxAutoFlush(supabase)
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); un(); stop() }
+  }, [])
 
   React.useEffect(() => {
     let alive = true
@@ -145,6 +160,15 @@ function HomeView({ kiosk, noScan }: { kiosk: boolean; noScan: boolean }) {
   // appelée par le scanner OU le formulaire URL
   async function addByUrlInternal(inputUrl: string) {
     if (!sess) return
+    // Offline → outbox
+    if (!navigator.onLine) {
+      addToOutbox(sess.id, inputUrl)
+      setPending(outboxCount())
+      setHint("Hors-ligne : l’entrée a été mise en attente et sera synchronisée automatiquement.")
+      beepWarn()
+      return
+    }
+
     setAddingUrl(true); setHint(null)
     try {
       const res = await supabase.functions.invoke('itac_profile_store', { body: { url: inputUrl } })
@@ -173,8 +197,16 @@ function HomeView({ kiosk, noScan }: { kiosk: boolean; noScan: boolean }) {
       }
       await loadEntries(sess.id)
     } catch (e: any) {
-      setErr(e?.message || String(e))
-      beepError()
+      // si erreur réseau, on bascule en outbox
+      if (!navigator.onLine) {
+        addToOutbox(sess.id, inputUrl)
+        setPending(outboxCount())
+        setHint("Hors-ligne : l’entrée a été mise en attente et sera synchronisée automatiquement.")
+        beepWarn()
+      } else {
+        setErr(e?.message || String(e))
+        beepError()
+      }
     } finally {
       setAddingUrl(false)
     }
@@ -215,8 +247,29 @@ function HomeView({ kiosk, noScan }: { kiosk: boolean; noScan: boolean }) {
     )
   }
 
+  async function forceSync() {
+    if (!sess) return
+    await flushOutbox(supabase)
+    await loadEntries(sess.id)
+    setPending(outboxCount())
+  }
+
   return (
     <div className="space-y-4">
+      {/* Bandeau état réseau / outbox */}
+      <div className="flex flex-wrap items-center gap-2">
+        {!isOnline && (
+          <div className="inline-flex items-center gap-2 rounded-full bg-amber-100 text-amber-900 px-3 py-1 text-sm">
+            <Icon name="cloud-off" /> Hors-ligne
+          </div>
+        )}
+        {pending > 0 && (
+          <button onClick={forceSync} className="inline-flex items-center gap-2 rounded-full bg-blue-100 text-blue-900 px-3 py-1 text-sm hover:bg-blue-200">
+            {isOnline ? 'À synchroniser' : 'En attente'} • {pending}
+          </button>
+        )}
+      </div>
+
       {!sess ? (
         <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/5">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -254,7 +307,7 @@ function HomeView({ kiosk, noScan }: { kiosk: boolean; noScan: boolean }) {
             {(!noScan && scannerOn) && (
               <div className="mt-3">
                 <QrScanner onDetect={onDetect} paused={!scannerOn} className="overflow-hidden rounded-xl ring-1 ring-black/5" />
-                <div className="mt-2 text-xs text-slate-500">Appuie sur “Démarrer la caméra” si nécessaire.</div>
+                <div className="mt-2 text-xs text-slate-500">Appuie sur “Démarrer la caméra”. Torche et choix caméra disponibles pendant le scan.</div>
               </div>
             )}
             {noScan && (
@@ -547,7 +600,7 @@ export default function App() {
   const kiosk = params.get('kiosk') === '1'
   const noScan = params.get('noscan') === '1'
 
-  // --- Hash routing pour fiabiliser le switch des vues
+  // Hash routing pour fiabiliser le switch des vues
   const initialView = ((): 'home'|'members'|'sessions' => {
     const v = location.hash.replace('#','')
     return (v === 'members' || v === 'sessions' || v === 'home') ? v : 'home'
