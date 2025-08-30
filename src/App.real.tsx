@@ -4,18 +4,17 @@ import { supabase } from './data/supabase'
 import { getTodaySession, openTodaySession, parisDateStr } from './lib/session'
 import QrScanner from './components/QrScanner'
 import { useWakeLock } from './hooks/useWakeLock'
+import { useBeep } from './hooks/useBeep'
 
-// -----------------------
-// Types
-// -----------------------
+// ------- Types -------
 type SessionRow = { id: string; date: string }
 type EntryRow = { id: string; session_id: string; licence_no: string; created_at?: string; source_url?: string | null }
 type Member = { licence_no: string; first_name: string | null; last_name: string | null; photo_url: string | null; source_url?: string | null }
 type ExportFormat = 'pdf' | 'xlsx' | 'csv'
 
-// -----------------------
+// ------- Utils UI -------
 function cls(...parts: (string | false | undefined | null)[]) { return parts.filter(Boolean).join(' ') }
-function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh' | 'external' | 'plus' | 'scan' | 'download' | 'camera'; className?: string }) {
+function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh' | 'external' | 'plus' | 'download' | 'camera'; className?: string }) {
   const path =
     name === 'user' ? "M12 12a5 5 0 100-10 5 5 0 000 10zm-9 9a9 9 0 1118 0H3z" :
     name === 'list' ? "M4 6h16M4 12h16M4 18h7" :
@@ -24,19 +23,32 @@ function Icon({ name, className }: { name: 'user' | 'list' | 'logout' | 'refresh
     name === 'external' ? "M10 6h8m0 0v8m0-8L9 15" :
     name === 'plus' ? "M12 4v16m8-8H4" :
     name === 'download' ? "M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" :
-    /* scan */ "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 002 2h2M21 17v2a2 2 0 01-2 2h-2"
+    /* camera */ "M3 7V5a2 2 0 012-2h2M21 7V5a2 2 0 00-2-2h-2M3 17v2a2 2 0 002 2h2M21 17v2a2 2 0 01-2 2h-2"
   return <svg viewBox="0 0 24 24" fill="none" className={cls("h-5 w-5 stroke-[2] stroke-current", className)}><path d={path} strokeLinecap="round" strokeLinejoin="round" /></svg>
 }
+
+// Reconstruit l’URL publique si `photo_url` est un chemin relatif du bucket
+function resolvePhotoUrl(photoUrl?: string | null): string | null {
+  if (!photoUrl) return null
+  if (/^https?:\/\//i.test(photoUrl)) return photoUrl
+  const base = (import.meta as any).env?.VITE_SUPABASE_URL || ''
+  const root = String(base).replace(/\/$/, '')
+  const path = String(photoUrl).replace(/^\/+/, '')
+  return `${root}/storage/v1/object/public/${path}`
+}
+
 function Avatar({ member }: { member: Member }) {
+  const [broken, setBroken] = React.useState(false)
   const label = `${member.first_name ?? ''} ${member.last_name ?? ''}`.trim() || member.licence_no
   const initial = (member.last_name?.[0] || member.first_name?.[0] || member.licence_no?.[0] || '?').toUpperCase()
-  if (member.photo_url) return <img src={member.photo_url} alt={label} className="h-10 w-10 rounded-full object-cover ring-1 ring-black/5" />
+  const src = !broken ? resolvePhotoUrl(member.photo_url || undefined) : null
+  if (src) {
+    return <img src={src} alt={label} onError={() => setBroken(true)} className="h-10 w-10 rounded-full object-cover ring-1 ring-black/5" />
+  }
   return <div className="h-10 w-10 rounded-full bg-blue-600 text-white grid place-items-center font-semibold ring-1 ring-black/5">{initial}</div>
 }
 
-// -----------------------
-// Export helper
-// -----------------------
+// ------- Export helpers -------
 async function exportRows(format: ExportFormat, filename: string, rows: Array<{ last_name: string; first_name: string; licence_no: string; created_at: string }>) {
   try {
     const mod: any = await import('./lib/exporters')
@@ -50,11 +62,8 @@ async function exportRows(format: ExportFormat, filename: string, rows: Array<{ 
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download=`${filename}.csv`; a.click(); URL.revokeObjectURL(a.href)
 }
 
-// -----------------------
-// Home (Entrées) + Scan QR
-// -----------------------
-function HomeView({ kiosk }: { kiosk: boolean }) {
-  const [loading, setLoading] = React.useState(true)
+// ===================== Home (Entrées) =====================
+function HomeView({ kiosk, noScan }: { kiosk: boolean; noScan: boolean }) {
   const [sess, setSess] = React.useState<SessionRow | null>(null)
   const [err, setErr] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
@@ -66,16 +75,16 @@ function HomeView({ kiosk }: { kiosk: boolean }) {
   const [addingUrl, setAddingUrl] = React.useState(false)
   const [hint, setHint] = React.useState<string | null>(null)
 
-  const [scannerOn, setScannerOn] = React.useState(kiosk) // en kiosque, scanner actif par défaut
+  const [scannerOn, setScannerOn] = React.useState(kiosk && !noScan)
+
+  const { beepOk, beepWarn, beepError } = useBeep()
 
   React.useEffect(() => {
     let alive = true
     ;(async () => {
       try {
-        setLoading(true)
         let s = await getTodaySession()
         if (!s && kiosk) {
-          // en kiosque, ouvre automatiquement la session
           try { s = await openTodaySession() } catch {}
         }
         if (!alive) return
@@ -85,9 +94,6 @@ function HomeView({ kiosk }: { kiosk: boolean }) {
       } catch (e: any) {
         if (!alive) return
         setErr(e?.message || String(e))
-      } finally {
-        if (!alive) return
-        setLoading(false)
       }
     })()
     return () => { alive = false }
@@ -158,13 +164,17 @@ function HomeView({ kiosk }: { kiosk: boolean }) {
       if (ins.error) {
         if ((ins.error as any).code === '23505') {
           setHint("Déjà enregistré aujourd’hui pour cette session.")
+          beepWarn()
         } else {
           throw ins.error
         }
+      } else {
+        beepOk()
       }
       await loadEntries(sess.id)
     } catch (e: any) {
       setErr(e?.message || String(e))
+      beepError()
     } finally {
       setAddingUrl(false)
     }
@@ -177,18 +187,9 @@ function HomeView({ kiosk }: { kiosk: boolean }) {
     setUrl('')
   }
 
-  // scan handler
   const onDetect = React.useCallback((text: string) => {
-    try {
-      // on ne traite que les URLs http(s); sinon, ignore
-      if (!/^https?:\/\//i.test(text)) return
-      // on désactive brièvement le scanner pour éviter spam
-      setScannerOn(false)
-      addByUrlInternal(text).finally(() => {
-        // réactive le scanner après 1s
-        setTimeout(() => setScannerOn(true), 1000)
-      })
-    } catch {}
+    if (!/^https?:\/\//i.test(text)) return
+    addByUrlInternal(text).catch(()=>{})
   }, [sess])
 
   function RowEntry({ row }: { row: EntryRow & { member?: Member | null } }) {
@@ -197,9 +198,10 @@ function HomeView({ kiosk }: { kiosk: boolean }) {
     const sub = m ? row.licence_no : '—'
     const time = row.created_at ? new Date(row.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'
     const link = (m?.source_url || row.source_url || null)
+    const memberForAvatar: Member = { licence_no: row.licence_no, first_name: m?.first_name ?? null, last_name: m?.last_name ?? null, photo_url: m?.photo_url ?? null, source_url: m?.source_url ?? undefined }
     return (
       <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50">
-        <Avatar member={{ licence_no: row.licence_no, first_name: m?.first_name ?? null, last_name: m?.last_name ?? null, photo_url: m?.photo_url ?? null, source_url: m?.source_url ?? undefined }} />
+        <Avatar member={memberForAvatar} />
         <div className="min-w-0 flex-1">
           <div className="font-medium truncate">{label}</div>
           <div className="text-xs text-slate-500">{time} • {sub}</div>
@@ -241,28 +243,32 @@ function HomeView({ kiosk }: { kiosk: boolean }) {
                 <button onClick={() => loadEntries(sess.id)} className="rounded-lg bg-white px-3 py-1.5 hover:bg-gray-100 ring-1 ring-gray-200 text-sm">
                   <span className="inline-flex items-center gap-2"><Icon name="refresh" /> Rafraîchir</span>
                 </button>
-                <button onClick={() => setScannerOn(s => !s)} className={cls("rounded-lg px-3 py-1.5 text-sm ring-1", scannerOn ? "bg-blue-600 text-white ring-blue-600" : "bg-white ring-gray-200 hover:bg-gray-100")}>
-                  <span className="inline-flex items-center gap-2"><Icon name="camera" /> {scannerOn ? 'Scanner ON' : 'Scanner OFF'}</span>
-                </button>
+                {!noScan && (
+                  <button onClick={() => setScannerOn(s => !s)} className={cls("rounded-lg px-3 py-1.5 text-sm ring-1", scannerOn ? "bg-blue-600 text-white ring-blue-600" : "bg-white ring-gray-200 hover:bg-gray-100")}>
+                    <span className="inline-flex items-center gap-2"><Icon name="camera" /> {scannerOn ? 'Scanner ON' : 'Scanner OFF'}</span>
+                  </button>
+                )}
               </div>
             </div>
 
-            {scannerOn && (
+            {(!noScan && scannerOn) && (
               <div className="mt-3">
                 <QrScanner onDetect={onDetect} paused={!scannerOn} className="overflow-hidden rounded-xl ring-1 ring-black/5" />
-                <div className="mt-2 text-xs text-slate-500">Aligne le QR dans le cadre. En kiosque, le scan reprend automatiquement après chaque enregistrement.</div>
+                <div className="mt-2 text-xs text-slate-500">Appuie sur “Démarrer la caméra” si nécessaire.</div>
               </div>
+            )}
+            {noScan && (
+              <div className="mt-2 text-sm text-blue-900 bg-blue-50 p-2 rounded">Mode sans scanner (?noscan=1). Utilise l’URL de secours ci-dessous.</div>
             )}
 
             {/* Ajout par URL (fallback) */}
-            {!kiosk && (
-              <form onSubmit={addByUrl} className="mt-3 grid gap-2 md:flex">
-                <input type="url" required placeholder="Coller l’URL du QR (ex: https://itac.pro/F.aspx?... )" value={url} onChange={(e)=>setUrl(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-                <button type="submit" disabled={addingUrl} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60" title="Ajouter une entrée via l’URL">
-                  {addingUrl ? '…' : (<><Icon name="plus" /> Ajouter</>)}
-                </button>
-              </form>
-            )}
+            <form onSubmit={addByUrl} className="mt-3 grid gap-2 md:flex">
+              <input type="url" required placeholder="Coller l’URL du QR (ex: https://itac.pro/F.aspx?... )" value={url} onChange={(e)=>setUrl(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <button type="submit" disabled={addingUrl} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-60" title="Ajouter une entrée via l’URL">
+                {addingUrl ? '…' : (<><Icon name="plus" /> Ajouter</>)}
+              </button>
+            </form>
+
             {hint && <div className="mt-2 text-sm text-amber-800 bg-amber-50 p-2 rounded">{hint}</div>}
             {err && <div className="mt-2 text-sm text-red-800 bg-red-50 p-2 rounded">Erreur: {err}</div>}
           </div>
@@ -286,9 +292,7 @@ function HomeView({ kiosk }: { kiosk: boolean }) {
   )
 }
 
-// -----------------------
-// Membres
-// -----------------------
+// ===================== Membres =====================
 function MembersView() {
   const [q, setQ] = React.useState('')
   const [rows, setRows] = React.useState<Member[]>([])
@@ -363,9 +367,7 @@ function MembersView() {
   )
 }
 
-// -----------------------
-// Sessions + exports
-// -----------------------
+// ===================== Sessions & Exports =====================
 function SessionsView() {
   const [sessions, setSessions] = React.useState<SessionRow[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -479,12 +481,11 @@ function SessionsView() {
           <h3 className="font-semibold">Toutes les sessions</h3>
           <div className="flex items-center gap-2">
             <label className="text-sm text-slate-600">Format</label>
-            <select onChange={e=>{/* handled per-row when exporting */}} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" disabled>
+            <select className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" disabled>
               <option>Choix dans l’export</option>
             </select>
           </div>
         </div>
-
         <SessionsTable onExport={exportOne} />
         {err && <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">Erreur: {err}</div>}
       </div>
@@ -540,13 +541,30 @@ function SessionsTable({ onExport }: { onExport: (s: { id: string; date: string 
   )
 }
 
-// -----------------------
-// App + Kiosk mode
-// -----------------------
+// ===================== App (kiosque + nav + hash-routing) =====================
 export default function App() {
   const params = new URLSearchParams(location.search)
   const kiosk = params.get('kiosk') === '1'
-  const [view, setView] = React.useState<'home'|'members'|'sessions'>(kiosk ? 'home' : 'home')
+  const noScan = params.get('noscan') === '1'
+
+  // --- Hash routing pour fiabiliser le switch des vues
+  const initialView = ((): 'home'|'members'|'sessions' => {
+    const v = location.hash.replace('#','')
+    return (v === 'members' || v === 'sessions' || v === 'home') ? v : 'home'
+  })()
+  const [view, setView] = React.useState<'home'|'members'|'sessions'>(initialView)
+  React.useEffect(() => {
+    const onHash = () => {
+      const v = location.hash.replace('#','')
+      if (v === 'members' || v === 'sessions' || v === 'home') setView(v)
+    }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  function navTo(v: 'home'|'members'|'sessions') {
+    if (location.hash !== `#${v}`) location.hash = v
+    setView(v)
+  }
 
   // Wake lock + plein écran en kiosque
   useWakeLock(kiosk)
@@ -560,7 +578,12 @@ export default function App() {
     goFS()
   }, [kiosk])
 
-  // “sortie” kiosque: appui long sur le logo (2s)
+  async function logout() {
+    await supabase.auth.signOut()
+    location.href = '/'
+  }
+
+  // Sortie kiosque (appui long sur le logo)
   const pressTimer = React.useRef<number | null>(null)
   const [exitHint, setExitHint] = React.useState(false)
   function startPress() {
@@ -575,14 +598,9 @@ export default function App() {
     const u = new URL(location.href); u.searchParams.delete('kiosk'); location.href = u.toString()
   }
 
-  async function logout() {
-    await supabase.auth.signOut()
-    location.href = '/'
-  }
-
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50 to-blue-100">
-      <header className={cls("sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-slate-200", kiosk && "py-1")}>
+      <header className={cls("sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-slate-200")}>
         <div className="mx-auto max-w-5xl p-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 select-none" onMouseDown={startPress} onMouseUp={endPress} onTouchStart={startPress} onTouchEnd={endPress}>
             <div className="h-8 w-8 rounded-xl bg-blue-600 text-white grid place-items-center font-bold">T</div>
@@ -593,13 +611,13 @@ export default function App() {
           </div>
           {!kiosk && (
             <nav className="flex items-center gap-2">
-              <button onClick={() => setView('home')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'home' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Entrées du jour">
+              <button onClick={() => navTo('home')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'home' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Entrées du jour">
                 <Icon name="list" /> Entrées
               </button>
-              <button onClick={() => setView('members')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'members' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Membres">
+              <button onClick={() => navTo('members')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'members' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Membres">
                 <Icon name="user" /> Membres
               </button>
-              <button onClick={() => setView('sessions')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'sessions' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Sessions & exports">
+              <button onClick={() => navTo('sessions')} className={cls("inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ring-1 text-sm", view === 'sessions' ? "bg-blue-600 text-white ring-blue-600" : "bg-white hover:bg-gray-100 ring-gray-200")} title="Sessions & exports">
                 <Icon name="download" /> Sessions
               </button>
               <button onClick={logout} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 ring-1 ring-gray-200 hover:bg-gray-100 text-sm" title="Se déconnecter">
@@ -614,7 +632,7 @@ export default function App() {
         <div className="fixed inset-0 z-20 bg-black/50 grid place-items-center p-4">
           <div className="rounded-2xl bg-white p-4 shadow ring-1 ring-black/10 max-w-sm w-full space-y-3">
             <div className="font-semibold">Mode kiosque</div>
-            <p className="text-sm text-slate-600">Pour sortir du mode kiosque, appuie sur “Quitter le kiosque”.</p>
+            <p className="text-sm text-slate-600">Appuie sur “Quitter le kiosque” pour revenir au mode normal.</p>
             <div className="flex items-center justify-end gap-2">
               <button onClick={()=>setExitHint(false)} className="rounded-lg bg-white px-3 py-1.5 ring-1 ring-slate-200 hover:bg-gray-50">Rester</button>
               <button onClick={exitKiosk} className="rounded-lg bg-blue-600 text-white px-3 py-1.5 hover:bg-blue-700">Quitter le kiosque</button>
@@ -624,21 +642,15 @@ export default function App() {
       )}
 
       <main className={cls("mx-auto max-w-5xl p-4", kiosk && "max-w-3xl")}>
-        {/* En kiosque, on n’affiche que “Entrées” */}
-        <HomeView kiosk={kiosk} />
-        {!kiosk && (
-          <>
-            {/* les autres vues sont accessibles via la nav */}
-          </>
-        )}
+        {view === 'home'     && <HomeView kiosk={kiosk} noScan={noScan} />}
+        {(!kiosk && view === 'members')  && <MembersView />}
+        {(!kiosk && view === 'sessions') && <SessionsView />}
       </main>
     </div>
   )
 }
 
-// -----------------------
-// Saisons utils
-// -----------------------
+// ------- Saisons utils -------
 function computeDefaultSeasonLabel(): string {
   const now = new Date()
   const y = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1
