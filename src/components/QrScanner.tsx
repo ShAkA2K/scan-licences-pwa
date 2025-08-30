@@ -8,80 +8,150 @@ type Props = {
   fps?: number
 }
 
-export default function QrScanner({ onDetect, paused = false, className, fps = 10 }: Props) {
-  const idRef = React.useRef('qr-' + Math.random().toString(36).slice(2))
-  const lastRef = React.useRef<{ text: string; t: number } | null>(null)
-  const scannerRef = React.useRef<any>(null)
-
-  React.useEffect(() => {
-    let active = true
-    let Html5QrcodeScanner: any
-    let Html5QrcodeSupportedFormats: any
-    let Html5QrcodeScanType: any
-
-    ;(async () => {
-      try {
-        const mod: any = await import('html5-qrcode')
-        Html5QrcodeScanner = mod.Html5QrcodeScanner
-        Html5QrcodeSupportedFormats = mod.Html5QrcodeSupportedFormats
-        Html5QrcodeScanType = mod.Html5QrcodeScanType
-
-        if (!active) return
-
-        const config = {
-          fps,
-          rememberLastUsedCamera: true,
-          qrbox: (vw: number, vh: number) => {
-            const size = Math.floor(Math.min(vw, vh) * 0.75)
-            return { width: size, height: size }
-          },
-          aspectRatio: 1.7778,
-          supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA],
-          formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
-        }
-
-        const s = new Html5QrcodeScanner(idRef.current, config, false)
-        scannerRef.current = s
-
-        const onSuccess = (decodedText: string) => {
-          const now = Date.now()
-          const last = lastRef.current
-          // anti-duplicate (1.5 s)
-          if (last && last.text === decodedText && now - last.t < 1500) return
-          lastRef.current = { text: decodedText, t: now }
-          onDetect(decodedText)
-        }
-
-        const onFailure = (_: any) => { /* ignore */ }
-
-        s.render(onSuccess, onFailure)
-      } catch (e) {
-        console.error('QR init failed', e)
+async function loadHtml5QrCode(): Promise<any> {
+  try {
+    // import normal (bundle)
+    return await import('html5-qrcode')
+  } catch {
+    // Fallback CDN (utile sur certains mobiles / vieilles WebViews)
+    const src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/minified/html5-qrcode.min.js'
+    await new Promise<void>((resolve, reject) => {
+      const s = document.createElement('script')
+      s.src = src
+      s.async = true
+      s.onload = () => resolve()
+      s.onerror = () => reject(new Error('CDN load failed'))
+      document.head.appendChild(s)
+    })
+    const g: any = window
+    if (g.Html5Qrcode && g.Html5QrcodeSupportedFormats) {
+      return {
+        Html5Qrcode: g.Html5Qrcode,
+        Html5QrcodeSupportedFormats: g.Html5QrcodeSupportedFormats
       }
-    })()
-
-    return () => {
-      active = false
-      try {
-        scannerRef.current?.clear?.()
-      } catch {}
-      scannerRef.current = null
     }
-  }, [fps, onDetect])
+    throw new Error('CDN globals not found')
+  }
+}
 
-  // pause/reprise : on détruit/relance si besoin
+export default function QrScanner({ onDetect, paused = false, className, fps = 10 }: Props) {
+  const boxId = React.useRef('qr-' + Math.random().toString(36).slice(2))
+  const instRef = React.useRef<any>(null)
+  const lastRef = React.useRef<{ text: string; t: number } | null>(null)
+
+  const [err, setErr] = React.useState<string | null>(null)
+  const [starting, setStarting] = React.useState(false)
+  const [running, setRunning] = React.useState(false)
+  const [cameras, setCameras] = React.useState<{ id: string; label?: string }[]>([])
+  const [camId, setCamId] = React.useState<string | null>(null)
+
+  // Pré-checks basiques
   React.useEffect(() => {
-    if (!scannerRef.current) return
-    if (paused) {
-      try { scannerRef.current.clear() } catch {}
-    } else {
-      // rien: la reprise se fait en recréant le composant (piloté par parent)
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+      setErr('Scanner indisponible (HTTPS requis).')
+    } else if (!(navigator.mediaDevices && 'getUserMedia' in navigator.mediaDevices)) {
+      setErr('Caméra non disponible sur ce navigateur.')
     }
-  }, [paused])
+  }, [])
+
+  // Pause -> stop
+  React.useEffect(() => {
+    if (!instRef.current) return
+    if (paused && running) stop().catch(()=>{})
+  }, [paused, running])
+
+  async function start() {
+    try {
+      setErr(null)
+      setStarting(true)
+
+      const mod: any = await loadHtml5QrCode()
+      const { Html5Qrcode, Html5QrcodeSupportedFormats } = mod
+
+      // Liste des caméras (geste utilisateur requis sur iOS/Chrome)
+      const list = await Html5Qrcode.getCameras()
+      const cams = (list ?? []).map((c: any) => ({ id: c.id, label: c.label }))
+      setCameras(cams)
+
+      // Choisir la dorsale si dispo
+      const byLabel = cams.find(c => (c.label || '').toLowerCase().includes('back')) || cams[0]
+      const chosenId = camId || byLabel?.id || cams[0]?.id || null
+      if (!chosenId) throw new Error('Aucune caméra disponible')
+
+      const html5 = new Html5Qrcode(boxId.current)
+      instRef.current = html5
+
+      const qrbox = (vw: number, vh: number) => {
+        const size = Math.floor(Math.min(vw, vh) * 0.75)
+        return { width: size, height: size }
+      }
+
+      const onSuccess = (decodedText: string) => {
+        const now = Date.now()
+        const last = lastRef.current
+        if (last && last.text === decodedText && now - last.t < 1500) return
+        lastRef.current = { text: decodedText, t: now }
+        onDetect(decodedText)
+      }
+
+      await html5.start(
+        { deviceId: { exact: chosenId } },
+        { fps, qrbox, formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE] },
+        onSuccess,
+        (_: any) => {} // ignore failures
+      )
+
+      setCamId(chosenId)
+      setRunning(true)
+    } catch (e: any) {
+      console.error('QR start fail', e)
+      if (e?.name === 'NotAllowedError') setErr('Permission caméra refusée. Autorise la caméra dans les paramètres du site.')
+      else if (e?.name === 'NotFoundError') setErr('Aucune caméra détectée.')
+      else setErr(e?.message || 'Erreur au démarrage du scanner.')
+      setRunning(false)
+      try { await stop() } catch {}
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  async function stop() {
+    const inst = instRef.current
+    if (!inst) return
+    try {
+      await inst.stop()
+      await inst.clear()
+    } catch {}
+    instRef.current = null
+    setRunning(false)
+  }
+
+  React.useEffect(() => {
+    return () => { stop().catch(()=>{}) }
+  }, [])
 
   return (
     <div className={className}>
-      <div id={idRef.current} />
+      <div id={boxId.current} className="overflow-hidden rounded-xl ring-1 ring-black/5 min-h-[200px] grid place-items-center bg-black/2" />
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {!running ? (
+          <button disabled={!!err || starting} onClick={start}
+                  className="rounded-lg bg-blue-600 text-white px-3 py-1.5 disabled:opacity-50">
+            {starting ? '…' : 'Démarrer la caméra'}
+          </button>
+        ) : (
+          <>
+            <button onClick={stop} className="rounded-lg bg-white px-3 py-1.5 ring-1 ring-slate-200 hover:bg-slate-50">Arrêter</button>
+            {cameras.length > 1 && (
+              <select value={camId ?? ''} onChange={e => { setCamId(e.target.value); stop().then(() => start()) }}
+                      className="rounded-lg border border-slate-300 px-2 py-1.5">
+                {cameras.map(c => <option key={c.id} value={c.id}>{c.label || c.id}</option>)}
+              </select>
+            )}
+          </>
+        )}
+      </div>
+      {err && <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-amber-900 text-sm">{err}</div>}
     </div>
   )
 }
